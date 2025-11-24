@@ -1,6 +1,6 @@
 # Magentic AI Chat - React Frontend
 
-Professional React frontend for multi-agent AI assistant with real-time streaming.
+Professional React frontend (powered by Vite) for multi-agent AI assistant with real-time streaming.
 
 ## Features
 
@@ -14,23 +14,29 @@ Professional React frontend for multi-agent AI assistant with real-time streamin
 ## Setup
 
 1. Install dependencies:
-```bash
-cd react-frontend
-npm install
-```
+
+   ```bash
+   cd react-frontend
+   npm install
+   ```
 
 2. Configure backend URL (optional):
-Create `.env` file:
-```
-REACT_APP_BACKEND_URL=http://localhost:7000
-```
 
-3. Start the development server:
-```bash
-npm start
-```
+   Create `.env` file:
 
-The app will open at http://localhost:3000
+   ```bash
+   VITE_BACKEND_URL=http://localhost:7000
+   ```
+
+   > `import.meta.env.VITE_*` is Vite's preferred naming convention. A legacy `REACT_APP_BACKEND_URL` is still read for backward compatibility, but new deployments should switch to `VITE_BACKEND_URL`.
+
+3. Start the Vite development server:
+
+   ```bash
+   npm run dev
+   ```
+
+Vite prints both local and network URLs in the terminal (defaults to <http://localhost:3000> based on `vite.config.js`).
 
 ## Usage
 
@@ -44,6 +50,9 @@ The app will open at http://localhost:3000
 
 ```bash
 npm run build
+
+# Optional: preview the optimized build locally
+npm run preview
 ```
 
-Serves the optimized production build from the `build/` directory.
+The optimized assets are emitted to the `dist/` directory (Vite default).

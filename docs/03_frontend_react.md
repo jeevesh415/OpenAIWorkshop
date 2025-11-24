@@ -40,39 +40,58 @@ The React frontend requires Node.js 16+ and npm.
 The React frontend connects to `http://localhost:7000` by default.
 
 > **Action Items (Optional):**
+>
 > To customize the backend URL, create a `.env` file in the `react-frontend` directory:
+>
 > ```bash
 > # react-frontend/.env
-> REACT_APP_BACKEND_URL=http://localhost:7000
+> VITE_BACKEND_URL=http://localhost:7000
 > ```
+>
+> Vite still reads `REACT_APP_BACKEND_URL` for backward compatibility, but new deployments should prefer the `VITE_` prefix.
 
 ### 3. Install dependencies and start React frontend
 
 > **Action Items:**
+>
 > Navigate to the React frontend directory from `agentic_ai/applications`:
+>
 > ```bash
 > cd react-frontend
 > ```
-> 
+>
 > Install dependencies (first time only, or after package.json changes):
+>
 > ```bash
 > npm install
 > ```
-> 
-> Start the development server:
+>
+> Start the Vite development server:
+>
 > ```bash
-> npm start
+> npm run dev
 > ```
-> 
-> The React app will automatically open at `http://localhost:3000`. If it doesn't open automatically, navigate to `http://localhost:3000` in your browser.
+>
+> Vite prints both local and network URLs in the terminal (defaults to `http://localhost:3000` per `vite.config.js`). If the browser doesn't open automatically, navigate to the printed URL.
+>
+> Optional production preview:
+>
+> ```bash
+> npm run build
+> npm run preview
+> ```
+>
+> The optimized assets are written to the `dist/` directory.
 
 ## Success criteria
+
 - React frontend is running on `http://localhost:3000`
 - Frontend successfully connects to backend on `http://localhost:7000`
 - You can interact with the AI agent through the chat interface
 - Real-time streaming and agent process visibility are working
 
 ## Troubleshooting
+
 - **Port 3000 already in use?** The React app will prompt you to use a different port. Type `Y` to accept.
 - **npm install fails?** Try clearing npm cache: `npm cache clean --force` and retry.
 - **WebSocket connection errors?** Ensure the backend is running on port 7000 and firewall isn't blocking connections.

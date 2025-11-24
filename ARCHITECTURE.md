@@ -217,10 +217,11 @@ graph LR
 - ✅ Extensible component architecture
 
 **Setup:**
+
 ```bash
 cd agentic_ai/applications/react-frontend
 npm install
-npm start  # Opens at http://localhost:3000
+npm run dev  # Vite dev server (http://localhost:3000 by default)
 ```
 
 📚 **[See React UI documentation →](agentic_ai/applications/react-frontend/README.md)**
@@ -245,6 +246,7 @@ npm start  # Opens at http://localhost:3000
 - ❌ Limited visibility into agent orchestration
 
 **Setup:**
+
 ```bash
 cd agentic_ai/applications
 uv run streamlit run frontend.py  # Opens at http://localhost:8501
@@ -654,8 +656,8 @@ uv run python backend.py
 # Terminal 3: React Frontend
 cd react-frontend
 npm install
-npm start
-# Open http://localhost:3000
+npm run dev
+# Open http://localhost:3000 (Vite default)
 ```
 
 ---
