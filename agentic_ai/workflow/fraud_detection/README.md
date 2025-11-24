@@ -333,6 +333,26 @@ npm run dev
 http://localhost:3000
 ```
 
+### Optional: Run the UI via Docker
+
+Build the static assets with your preferred backend endpoints:
+
+```bash
+cd agentic_ai/workflow/fraud_detection/ui
+docker build -t fraud-detection-ui \
+   --build-arg VITE_API_BASE_URL=http://host.docker.internal:8001/api \
+   --build-arg VITE_WS_URL=ws://host.docker.internal:8001/ws \
+   .
+```
+
+Run the container (the UI is served via `npx serve` on port 3000 inside the container):
+
+```bash
+docker run --rm -p 3000:3000 fraud-detection-ui
+```
+
+Open <http://localhost:3000> (or change the host port in `-p HOST:3000` if you need multiple UIs simultaneously). Update the `--build-arg` values whenever the backend endpoints change (Vite injects them during `npm run build`).
+
 ### Using the UI
 
 1. **Select Alert**: Choose from 3 sample alerts (ALERT-001, ALERT-002, ALERT-003)

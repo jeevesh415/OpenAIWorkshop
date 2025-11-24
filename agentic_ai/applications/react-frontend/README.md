@@ -56,3 +56,21 @@ npm run preview
 ```
 
 The optimized assets are emitted to the `dist/` directory (Vite default).
+
+## Docker (optional)
+
+Build the static assets inside a container (override the backend URL at build time if needed):
+
+```bash
+docker build -t magentic-chat-ui \
+   --build-arg VITE_BACKEND_URL=http://localhost:7000 \
+   .
+```
+
+Run the optimized bundle with `npx serve` inside the container:
+
+```bash
+docker run --rm -p 3000:3000 magentic-chat-ui
+```
+
+Open <http://localhost:3000>. Because Vite inlines env vars during `npm run build`, changing the backend URL requires rebuilding the image with a different `--build-arg` value.
