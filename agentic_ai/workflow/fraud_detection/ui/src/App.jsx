@@ -18,6 +18,28 @@ import AnalystDecisionPanel from './components/AnalystDecisionPanel';
 import EventLog from './components/EventLog';
 import { useWebSocket } from './hooks/useWebSocket';
 
+const DEFAULT_API_BASE = '/api';
+const DEFAULT_WS_URL = 'ws://localhost:8001/ws';
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  import.meta.env.REACT_APP_API_BASE_URL ??
+  DEFAULT_API_BASE;
+
+const WS_URL =
+  import.meta.env.VITE_WS_URL ??
+  import.meta.env.REACT_APP_WS_URL ??
+  DEFAULT_WS_URL;
+
+const normalizeBase = (value) => {
+  if (!value) {
+    return '';
+  }
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+};
+
+const apiBase = normalizeBase(API_BASE_URL);
+
 const theme = createTheme({
   palette: {
     mode: 'light',
@@ -51,11 +73,11 @@ function App() {
   const [executorStates, setExecutorStates] = useState({});
 
   // WebSocket hook for real-time updates
-  const { lastMessage, sendMessage } = useWebSocket('ws://localhost:8001/ws');
+  const { lastMessage, sendMessage } = useWebSocket(WS_URL);
 
   // Load sample alerts on mount
   useEffect(() => {
-    fetch('/api/alerts')
+  fetch(`${apiBase || DEFAULT_API_BASE}/alerts`)
       .then((res) => res.json())
       .then((data) => setAlerts(data.alerts))
       .catch((err) => console.error('Error loading alerts:', err));
@@ -125,7 +147,7 @@ function App() {
     setPendingDecision(null);
 
     try {
-      const response = await fetch('/api/workflow/start', {
+  const response = await fetch(`${apiBase || DEFAULT_API_BASE}/workflow/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -145,7 +167,7 @@ function App() {
     console.log('Submitting decision:', decision);
 
     try {
-      const response = await fetch('/api/workflow/decision', {
+  const response = await fetch(`${apiBase || DEFAULT_API_BASE}/workflow/decision`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

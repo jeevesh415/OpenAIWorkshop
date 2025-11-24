@@ -39,7 +39,10 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { v4 as uuidv4 } from 'uuid';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:7000';
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL ??
+  import.meta.env.REACT_APP_BACKEND_URL ??
+  'http://localhost:7000';
 const WS_URL = BACKEND_URL.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/chat';
 
 const theme = createTheme({
