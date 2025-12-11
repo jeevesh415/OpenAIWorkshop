@@ -1,0 +1,204 @@
+{
+  "test_cases": [
+    {
+      "id": "example_1_billing",
+      "customer_query": "I noticed my last invoice was higher than usual - can you help me understand why and what can be done about it?",
+      "customer_id": 251,
+      "expected_analysis": [
+        "Check billing history and recent changes in subscriptions or charges",
+        "Review policy for invoice adjustments"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Billing Database",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_billing_summary",
+        "get_subscription_detail",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_billing_summary",
+        "get_subscription_detail"
+      ],
+      "expected_knowledge_queries": [
+        "invoice adjustment",
+        "billing policy",
+        "refund policy"
+      ],
+      "success_criteria": {
+        "must_access_billing": true,
+        "must_explain_charges": true
+      }
+    },
+    {
+      "id": "example_2_service_quality",
+      "customer_query": "My internet service seems slower than before - can you check what's happening?",
+      "customer_id": 101,
+      "expected_analysis": [
+        "Review the customer's current subscription plan and service status",
+        "Check for recent service incidents or network usage history",
+        "Search knowledge base for troubleshooting guidance or policies on service quality guarantees"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Service Monitoring and Diagnostics System",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_subscription_detail",
+        "get_data_usage",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_subscription_detail"
+      ],
+      "expected_knowledge_queries": [
+        "slow internet",
+        "troubleshooting",
+        "service quality",
+        "speed tier"
+      ],
+      "success_criteria": {
+        "must_check_subscription": true,
+        "must_provide_troubleshooting": true
+      }
+    },
+    {
+      "id": "example_3_international_roaming",
+      "customer_query": "I'm traveling abroad next month. What should I do about my phone plan?",
+      "customer_id": 250,
+      "expected_analysis": [
+        "Check the customer's current mobile subscription, roaming capabilities, and international charges",
+        "Search knowledge base for suitable international roaming options or temporary international plans",
+        "Update the plan after verifying eligibility and availability"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Product & Service Database",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_subscription_detail",
+        "get_products",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_subscription_detail"
+      ],
+      "expected_knowledge_queries": [
+        "international roaming",
+        "roaming policy",
+        "travel abroad",
+        "international plan"
+      ],
+      "success_criteria": {
+        "must_check_current_plan": true,
+        "must_explain_roaming_charges": true
+      }
+    },
+    {
+      "id": "example_4_account_lockout",
+      "customer_query": "I tried logging into my account, but it says I'm locked out. Can you help?",
+      "customer_id": 1,
+      "expected_analysis": [
+        "Review the customer's account status, recent login attempts, and security alerts",
+        "Investigate reasons for account lockout in the security database",
+        "Search knowledge base for account security policies, unlock procedures, and verification processes"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Security & Authentication System",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_security_logs",
+        "unlock_account",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_security_logs"
+      ],
+      "expected_knowledge_queries": [
+        "account lockout",
+        "unlock procedure",
+        "security policy",
+        "account recovery"
+      ],
+      "success_criteria": {
+        "must_check_security_logs": true,
+        "must_explain_lockout_reason": true
+      }
+    },
+    {
+      "id": "example_5_promotions",
+      "customer_query": "Do I qualify for any discounts or promotions right now?",
+      "customer_id": 104,
+      "expected_analysis": [
+        "Check the customer's account history, current subscriptions, loyalty status, and previous promotional usage",
+        "Search the product database for active promotions or discounts applicable to the customer's profile",
+        "Refer to the knowledge base for eligibility criteria for promotions or loyalty rewards"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Promotions & Discounts Database",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_eligible_promotions",
+        "get_promotions",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_eligible_promotions"
+      ],
+      "expected_knowledge_queries": [
+        "promotion eligibility",
+        "loyalty rewards",
+        "discount criteria"
+      ],
+      "success_criteria": {
+        "must_check_promotions": true,
+        "must_explain_eligibility": true
+      }
+    },
+    {
+      "id": "example_6_product_return",
+      "customer_query": "I want to return a product I recently purchased. What's the process?",
+      "customer_id": 251,
+      "expected_analysis": [
+        "Confirm recent purchases from the customer's order history",
+        "Check eligibility for return based on purchase date and item category",
+        "Search the knowledge base for return policies, guidelines, and procedures"
+      ],
+      "expected_systems_accessed": [
+        "CRM",
+        "Order Management System",
+        "Knowledge Base"
+      ],
+      "expected_tools": [
+        "get_customer_detail",
+        "get_customer_orders",
+        "search_knowledge_base"
+      ],
+      "required_tools": [
+        "get_customer_orders"
+      ],
+      "expected_knowledge_queries": [
+        "return policy",
+        "return procedure",
+        "refund process",
+        "return eligibility"
+      ],
+      "success_criteria": {
+        "must_check_orders": true
+      }
+    }
+  ]
+}

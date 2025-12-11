@@ -1,0 +1,7 @@
+# Evaluation results directory
+eval_results/
+*.pyc
+__pycache__/
+.pytest_cache/
+*.json.bak
+agent_traces.json
