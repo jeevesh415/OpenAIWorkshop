@@ -17,11 +17,15 @@ def get_agent():
         endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
         credential=DefaultAzureCredential(),
     ).create_agent(
-        name="msft-learn-mcp-agent",
-        instructions="You are a helpful assistant that can help with microsoft documentation questions.",
+        name="contoso-customer-agent",
+        instructions=(
+            "You are a helpful customer service assistant for Contoso. "
+            "You have access to customer profiles, billing information, orders, subscriptions, "
+            "and support capabilities. Help customers with their accounts, billing questions, and issues."
+        ),
         tools=MCPStreamableHTTPTool(
-            name="Microsoft Learn MCP",
-            url="https://learn.microsoft.com/api/mcp",
+            name="Contoso Customer API",
+            url="https://contoso-mcp.gentlesky-f07b735a.northcentralus.azurecontainerapps.io/mcp",
         ),
     )
     return agent

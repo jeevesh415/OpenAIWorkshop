@@ -1,53 +1,167 @@
-# Microsoft Foundry Hosted Agent Workshop
+# Contoso Customer Support Agent
 
-This repository contains a starter template for building an Microsoft Foundry that hosts AI agents using the Microsoft Foundry Hosted Agent Service.
+A production-ready AI agent for Contoso customer support, powered by a custom Model Context Protocol (MCP) service with access to customer data, billing information, orders, and subscriptions.
 
-## Getting Started
+## Architecture
 
-Clone this repository to your local machine using the following command:
-
-```bash
-git clone https://github.com/hatasaki/hosted-agent-workshop.git
-cd hosted-agent-workshop
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Azure Container Apps                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────────┐              ┌──────────────────────┐   │
+│  │    Agent         │              │   Contoso MCP        │   │
+│  │ (GPT-4o-mini)    │◄──HTTPS──►│  FastMCP Service      │   │
+│  │                  │              │ - 17+ Customer Tools │   │
+│  │ - Customer Q&A   │              │ - SQLite Database    │   │
+│  │ - Billing Help   │              │ - 250+ Customers     │   │
+│  │ - Order Support  │              └──────────────────────┘   │
+│  │ - Subscriptions  │              │ /data/contoso.db     │   │
+│  └──────────────────┘              └──────────────────────┘   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Prerequisites
+## Features
 
-* Install [azd](https://aka.ms/install-azd)
-  * Windows: `winget install microsoft.azd`
-  * Linux: `curl -fsSL https://aka.ms/install-azd.sh | bash`
-  * MacOS: `brew tap azure/azd && brew install azd`
+- **Custom MCP Service**: FastMCP-based service with 17+ tools for customer data access
+- **SQLite Database**: Pre-loaded with 250+ Contoso test customers
+- **Azure Deployment**: Fully containerized and deployed to Azure Container Apps
+- **Secure HTTPS**: All communications encrypted and authenticated
+- **Managed Identity**: Azure-native authentication, no credential management
 
-### Quickstart
+## Components
 
-0. Create new directory and navigate into it:
+### 1. Custom MCP (`/custom-mcp`)
+- **FastMCP Server** with HTTP transport
+- **Contoso Tools** (contoso_tools.py):
+  - get_customer_detail
+  - get_all_customers
+  - update_customer_profile
+  - get_customer_orders
+  - pay_invoice
+  - get_subscription_info
+  - And more...
+- **SQLite Database** (contoso.db): 1.4 MB, bundled in Docker image
+- **Deployment**: Azure Container Apps public endpoint
 
-    ```shell
-    mkdir my-hosted-agent
-    cd my-hosted-agent
-    ```
+### 2. Agent (`/my-hosted-agent`)
+- **Azure AI Agent** configured for customer support
+- **Prompt Engineering**: Tuned for Contoso customer service scenarios
+- **MCP Integration**: Connects to custom Contoso MCP via HTTPS
+- **Azure Deployment**: Deployed via `azd up`
 
-1. Bring down the template code:
+## Prerequisites
 
-    ```shell
-    azd init -t https://github.com/Azure-Samples/azd-ai-starter-basic
-    ```
-    - input your unique project name when prompted. Ex. `<username>-hosted-agent`
+- Azure subscription
+- [Azure Developer CLI (azd)](https://aka.ms/install-azd)
+- Docker (for local testing)
+- Python 3.11+
 
-    This will perform a git clone
+## Deployment
 
-2. Sign into your Azure account:
+### Deploy MCP Service
 
-    ```shell
-    azd auth login
-    ```
+```bash
+cd custom-mcp
+pwsh deploy-container-app.ps1
+```
 
-3. Download a sample agent definition:
+### Deploy Agent
 
-    ```shell
-    azd ai agent init -m ../msft-docs-agent/agent.yaml
-    ```
-  - install agent extension if prompted.
+```bash
+cd my-hosted-agent
+azd up
+```
+
+## Testing
+
+### Using Azure Portal Agent Playground
+
+1. After `azd up`, visit the Agent playground URL provided in the output
+2. Test with queries like:
+   - "Tell me the details of customer with ID 1"
+   - "What are the orders for customer 5?"
+   - "Show me pending invoices for customer 3"
+
+### Using Azure SDK (Python)
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+
+client = AIProjectClient(
+    endpoint="https://ai-account-icwwbtncyhx5a.services.ai.azure.com/api/projects/ai-project-testv2HA",
+    credential=DefaultAzureCredential(),
+)
+
+agent = client.agents.get("msft-learn-mcp-agent")
+openai_client = client.get_openai_client()
+
+response = openai_client.responses.create(
+    input=[{"role": "user", "content": "Tell me about customer 1"}],
+    extra_body={"agent": {"name": agent.name, "type": "agent_reference"}},
+)
+
+print(response.output_text)
+```
+
+## File Structure
+
+```
+hosted-agent-workshop/
+├── custom-mcp/                     # Custom MCP service
+│   ├── main.py                     # FastMCP server
+│   ├── contoso_tools.py            # Customer tools
+│   ├── Dockerfile                  # Container image
+│   ├── requirements.txt            # Python dependencies
+│   └── data/
+│       └── contoso.db              # Customer database
+├── my-hosted-agent/                # Agent deployment
+│   ├── azure.yaml                  # Deployment config
+│   ├── README.md                   # Agent documentation
+│   ├── src/
+│   │   └── msft-learn-mcp-agent/
+│   │       └── main.py             # Agent code
+│   └── infra/                      # Infrastructure as code
+│       ├── main.bicep
+│       ├── main.parameters.json
+│       └── core/                   # Azure resource definitions
+├── deploy-container-app.ps1        # MCP deployment script
+└── README.md                       # This file
+```
+
+## Configuration
+
+### Azure AI Project Endpoint
+Set in `my-hosted-agent/azure.yaml`:
+```yaml
+environment_variables:
+  - name: AZURE_AI_PROJECT_ENDPOINT
+    value: "https://ai-account-icwwbtncyhx5a.services.ai.azure.com/api/projects/ai-project-testv2HA"
+```
+
+### MCP URL
+Configured in `my-hosted-agent/src/msft-learn-mcp-agent/main.py`:
+```python
+url="https://contoso-mcp.gentlesky-f07b735a.northcentralus.azurecontainerapps.io/mcp"
+```
+
+## Production Considerations
+
+- **Database**: Replace `contoso.db` with production customer data
+- **Scaling**: Configure min/max replicas in `azure.yaml`
+- **Security**: Use Azure Key Vault for secrets
+- **Monitoring**: Application Insights logs in Azure portal
+- **Authentication**: Uses Azure Managed Identity (no API keys needed)
+
+## Support
+
+For issues or questions, check:
+- Azure Container Apps logs: `az containerapp logs show -n contoso-mcp -g rg-testv2HA`
+- Agent playground in Azure Portal
+- Application Insights metrics
+
   - select your subscription when prompted.
   - select `North Central US` region.
   - select `GlobalStandard` for mode SKU.
