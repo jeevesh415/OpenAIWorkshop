@@ -1,25 +1,10 @@
-![alt text](docs/media/image-1.png)
-# Microsoft AI Agentic Workshop Repository  
-  
-Welcome to the official repository for the Microsoft AI Agentic Workshop! This repository provides all the resources, code, and documentation you need to explore, prototype, and compare various agent-based AI solutions using Microsoft's leading AI technologies.  
-  
----  
-  
-## Quick Links  
-  
-- [Business Scenario and Agent Design](./SCENARIO.md)  
-- [Getting Started (Setup Instructions)](./SETUP.md)  
-- [System Architecture Overview](./ARCHITECTURE.md)  
-- [Data Sets](./DATA.md)  
-- [APIM + MCP Security (Optional)](./mcp/MULTI_TENANT_MCP_SECURITY.md)  
-- [Code of Conduct](./CODE_OF_CONDUCT.md)  
-- [Security Guidelines](./SECURITY.md)  
-- [Support](./SUPPORT.md)  
-- [License](./LICENSE)  
-  
----  
-  
-## What You Can Do With This Workshop  
+# Contoso Customer Support Agent
+
+A production-ready AI agent for Contoso customer support, powered by a custom Model Context Protocol (MCP) service with access to customer data, billing information, orders, and subscriptions.
+
+> **Note:** Azure Hosted Agents is currently in preview. This prototype demonstrates hosted agents with custom MCP integration and was inspired by [hatasaki/hosted-agent-workshop](https://github.com/hatasaki/hosted-agent-workshop).
+
+## Architecture  
   
 - **Design and prototype agent solutions** for real-world business scenarios.  
 - **Compare single-agent vs. multi-agent** architectures and approaches.  
