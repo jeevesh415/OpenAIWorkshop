@@ -1,0 +1,2 @@
+# Use copy mode instead of hardlinks to avoid OneDrive issues
+link-mode = "copy"
