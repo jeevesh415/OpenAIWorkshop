@@ -3,10 +3,10 @@
 requiredVersions:
     extensions:
         azure.ai.agents: '>=0.1.0-preview'
-name: ai-foundry-starter-basic
+name: contoso-support-agent
 services:
-    msft-learn-mcp-agent:
-        project: src/msft-learn-mcp-agent
+    contoso-support-agent:
+        project: contoso-support-agent
         host: azure.ai.agent
         language: docker
         docker:
