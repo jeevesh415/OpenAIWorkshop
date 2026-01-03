@@ -57,7 +57,7 @@ def get_agent() -> ChatAgent:
         # Get this from: Azure Portal > Container Apps > Your MCP Service > Ingress > Application URL
         tools=MCPStreamableHTTPTool(
             name="Contoso Customer API",
-            url="https://contoso-mcp.gentlesky-f07b735a.northcentralus.azurecontainerapps.io/mcp",
+            url="<your-mcp-service-url>",
         ),
     )
     return agent
@@ -162,7 +162,7 @@ if __name__ == "__main__":
                 
                 # Test 5: Verify MCP tool configuration
                 print("\nTest 5: Verifying MCP tool URL...")
-                mcp_url = "https://contoso-mcp.gentlesky-f07b735a.northcentralus.azurecontainerapps.io/mcp"
+                mcp_url = "<your-mcp-service-url>"
                 print(f"✓ MCP URL configured: {mcp_url}")
                 
                 # Test 6: Verify default values
