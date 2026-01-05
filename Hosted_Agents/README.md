@@ -1,5 +1,14 @@
 # Contoso Customer Support Agent - Azure Foundry Hosted Agent Example
 
+## Purpose
+
+This repository is intended to help you explore Azure Foundry Hosted Agents orchestrated with the Microsoft Agent Framework and using a custom MCP (Model Context Protocol) service. The example assumes that the MCP service is already hosted (for example, in Azure Container Apps) and that you will provide the MCP endpoint URL to the agent at runtime.
+
+At a glance:
+- Hosted Agent orchestrated by Agent Framework
+- Custom MCP service (pre-hosted, typically in Azure Container Apps)
+- Minimal configuration via a project-level `.env`
+
 This repository contains a **production-ready example** of an Azure Foundry Hosted Agent integrated with a custom MCP (Model Context Protocol) service. It demonstrates how to build, deploy, and manage AI agents that have real-time access to business data through a containerized MCP service.
 
 ⚠️ **IMPORTANT**: This is a template with placeholder values for Azure resources. You **MUST** replace these with your own values before deployment. See [Configuration](#-configuration) section below.
@@ -56,6 +65,14 @@ Additional Azure Resources (via Bicep):
 ## 🚀 Quick Start
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
+
+### Prerequisites (Important)
+
+- Azure subscription with permissions to deploy resources
+- MCP URL (for your custom MCP server). If you are bringing your own custom MCP:
+    - Host it in Azure Container Apps (or another reachable endpoint)
+    - Obtain the public URL and ensure the MCP path suffix is `/mcp` (e.g., `https://<your-app>.<region>.azurecontainerapps.io/mcp`)
+- A project-level `.env` file in `Hosted_Agents/` with required endpoints and settings (see the Variables section below)
 
 ### 30-Second Overview
 
@@ -245,8 +262,10 @@ Key variables:
 - `AZURE_SUBSCRIPTION_ID`: Your Azure subscription
 - `AZURE_AI_PROJECT_ENDPOINT`: Foundry project endpoint (set during deployment)
 - `AZURE_AI_MODEL_DEPLOYMENT_NAME`: LLM model to use (default: gpt-4o-mini)
-- `MCP_SERVICE_URL`: URL to your MCP service endpoint
+- `MCP_SERVICE_URL`: URL to your MCP service endpoint (must include the `/mcp` suffix)
 - `DISABLE_AUTH`: Set to `true` for local testing
+
+If you are using a custom MCP, host it in Azure Container Apps (ACA) and populate `MCP_SERVICE_URL` with the ACA ingress URL plus `/mcp`.
 
 ## 📚 How It Works
 
@@ -298,6 +317,10 @@ This is a **reference implementation**. Before production:
 - [ ] Implement audit logging
 - [ ] Validate all user inputs
 - [ ] Use private endpoints for network isolation
+
+## 🙏 Attribution
+
+This hosted agents sample is adapted from and inspired by work by Keisuke Hatasaki.
 
 ## 📖 Learning Resources
 

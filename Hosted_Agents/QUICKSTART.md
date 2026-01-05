@@ -11,8 +11,11 @@ Before you start, ensure you have:
    - Windows: `winget install microsoft.azd`
    - macOS: `brew tap azure/azd && brew install azd`
    - Linux: `curl -fsSL https://aka.ms/install-azd.sh | bash`
-3. **Docker** (optional, for local testing) - [Install here](https://docs.docker.com/get-docker/)
-4. **Python 3.9+** (optional, for local development)
+3. **MCP Service URL** (Required for the agent to call tools)
+   - If you have a custom MCP, host it in Azure Container Apps and copy the public ingress URL (append `/mcp`).
+   - Example: `https://<your-app>.<region>.azurecontainerapps.io/mcp`
+4. **Docker** (optional, for local testing) - [Install here](https://docs.docker.com/get-docker/)
+5. **Python 3.9+** (optional, for local development)
 
 ## 🚀 Deployment Steps
 
@@ -51,6 +54,10 @@ AZURE_RESOURCE_GROUP=rg-contoso-dev-001
 
 # Azure region (e.g., eastus, northcentralus)
 AZURE_LOCATION=northcentralus
+
+# MCP service (if using a custom MCP)
+# Provide the full URL with '/mcp' suffix
+MCP_SERVICE_URL=https://<your-mcp-service-url>/mcp
 ```
 
 ### Step 4: Authenticate with Azure
@@ -75,7 +82,7 @@ This will:
 
 ⏱️ **This takes 5-10 minutes.** Grab a coffee!
 
-**⚠️ IMPORTANT - Copy the MCP Service URL shown at the end of deployment**
+**⚠️ IMPORTANT - MCP Service URL**
 
 When `azd up` completes, look for:
 ```
@@ -89,13 +96,13 @@ Save this URL - you'll need it in the next step!
 
 Now that deployment is complete, you MUST replace placeholder values with your actual Azure resources:
 
-1. **Update `.env` file**:
+1. **Update `.env` file** (if not already set):
    ```bash
-   # Replace <your-mcp-service-url> with the URL from Step 5
+   # Replace <your-mcp-service-url> with your custom MCP URL
    MCP_SERVICE_URL=https://contoso-mcp-<random-id>.northcentralus.azurecontainerapps.io/mcp
    ```
 
-2. **Update `contoso-support-agent/main.py`**:
+2. **Update `contoso-support-agent/main.py`** (only if you prefer hardcoding the URL):
    ```bash
    # Find line with "<your-mcp-service-url>" and replace with your actual URL
    url=os.environ.get("MCP_SERVICE_URL", "<your-mcp-service-url>/mcp")
@@ -162,10 +169,10 @@ In a third terminal:
 cd contoso-support-agent
 pip install -r requirements.txt
 
-# Set environment variables
-export AZURE_AI_PROJECT_ENDPOINT="http://localhost:8080"
-export AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4o-mini"
-export MCP_SERVICE_URL="http://localhost:8000/mcp"
+# Set environment variables (Windows PowerShell examples below)
+# $env:AZURE_AI_PROJECT_ENDPOINT="http://localhost:8080"
+# $env:AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-4o-mini"
+# $env:MCP_SERVICE_URL="http://localhost:8000/mcp"
 
 python main.py
 ```
