@@ -33,7 +33,7 @@ agent-framework-redis==1.0.0b251114
     # via agent-framework
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.13.2
+aiohttp==3.13.3
     # via
     #   agent-framework-azure-ai
     #   semantic-kernel
