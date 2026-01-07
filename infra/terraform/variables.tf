@@ -81,3 +81,9 @@ variable "subnet_default_address_space" {
   type = list(string)
   default = ["10.0.0.0/24"]
 }
+
+variable "subnet_infra_address_space" {
+  description = "Address space for subnet that does not need delegation (private endpoints, etc.)"
+  type = list(string)
+  default = ["10.0.1.0/24"]
+}
