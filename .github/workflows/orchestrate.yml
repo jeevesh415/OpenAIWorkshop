@@ -17,6 +17,7 @@ on:
   push:
     branches:
       - tjs-infra-as-code
+      - tjs
 
 permissions:
   contents: read
@@ -69,6 +70,7 @@ jobs:
 
 
   build-backend-container:
+    if: github.ref_name != 'tjs'  
     needs: preflight
     uses: ./.github/workflows/docker-fastapi.yml
     with:
@@ -88,6 +90,7 @@ jobs:
     secrets: inherit
 
   build-mcp-container:
+    if: github.ref_name != 'tjs'  
     needs: preflight
     uses: ./.github/workflows/docker-mcp.yml
     with:
