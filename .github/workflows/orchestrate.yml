@@ -110,7 +110,6 @@ jobs:
     secrets: inherit
 
   deploy-infrastructure:
-    needs: [ build-backend-container, build-mcp-container ]
     uses: ./.github/workflows/infrastructure.yml
     with:
       environment: >-
