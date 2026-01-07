@@ -69,3 +69,15 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "vnet_address_space" {
+  description = "Address space for vnet. Calculation has not been fully done on minimum size"
+  type = list(string)
+  default = ["10.0.0.0/16"]
+}
+
+variable "subnet_default_address_space" {
+  description = "Address space for subnet that does not need delegation (private endpoints, etc.)"
+  type = list(string)
+  default = ["10.0.0.0/24"]
+}
