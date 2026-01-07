@@ -9,20 +9,20 @@ terraform {
       source  = "hashicorp/azuread"
       version = ">= 3.6.0"
     }
-        random = {
+    random = {
       source  = "hashicorp/random"
       version = "~> 3.4"
     }
   }
   backend "azurerm" {
-    use_oidc = true
+    use_oidc         = true
     use_azuread_auth = true
   }
 }
 
 
 provider "azurerm" {
-    features {
+  features {
     resource_group {
       prevent_deletion_if_contains_resources = false
     }

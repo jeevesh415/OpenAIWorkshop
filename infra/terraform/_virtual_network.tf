@@ -12,21 +12,32 @@ resource "azurerm_virtual_network" "base" {
 }
 
 resource "azurerm_subnet" "default" {
-    name = "snet-default"
-    resource_group_name = azurerm_resource_group.rg.name
-    virtual_network_name = azurerm_virtual_network.base.name
-    address_prefixes = var.subnet_default_address_space
+  name                 = "snet-default"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.base.name
+  address_prefixes     = var.subnet_default_address_space
 
-    private_endpoint_network_policies = "Enabled"
+  private_endpoint_network_policies = "Enabled"
 }
 
 resource "azurerm_subnet" "containerapps" {
-    name = "snet-containerapps"
-    resource_group_name = azurerm_resource_group.rg.name
-    virtual_network_name = azurerm_virtual_network.base.name
-    address_prefixes = var.subnet_infra_address_space
+  name                 = "snet-containerapps"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.base.name
+  address_prefixes     = var.subnet_infra_address_space
 
-    private_endpoint_network_policies = "Enabled"
+  private_endpoint_network_policies = "Enabled"
+
+  delegation {
+    name = "delegation-containerapps"
+    service_delegation {
+      name = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action",
+        "Microsoft.Network/virtualNetworks/subnets/prepareNetworkPolicies/action"
+      ]
+    }
+  }
 }
 
 resource "azurerm_subnet_network_security_group_association" "default-nsg-association" {

@@ -67,7 +67,7 @@ resource "azurerm_container_app" "backend" {
       }
 
       env {
-        name        = "AZURE_OPENAI_ENDPOINT"
+        name  = "AZURE_OPENAI_ENDPOINT"
         value = local.openai_endpoint
       }
 
