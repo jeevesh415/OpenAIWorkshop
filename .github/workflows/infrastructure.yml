@@ -76,7 +76,7 @@ jobs:
             -var location=${{ vars.AZ_REGION }} \
             -var docker_image_mcp=${{ vars.DOCKER_IMAGE_MCP }} \
             -var docker_image_backend=${{ vars.DOCKER_IMAGE_BACKEND }} \
-            -var iteration=${{ (github.event_name != 'workflow_dispatch' && github.base_ref != 'main' && github.base_ref != 'int-agentic') && '${GITHUB_SHA:0:7}' || vars.ITERATION }}
+            -var iteration=${{ vars.ITERATION || '${GITHUB_SHA:0:7}' }}
 
           terraform apply -auto-approve tfplan
 
