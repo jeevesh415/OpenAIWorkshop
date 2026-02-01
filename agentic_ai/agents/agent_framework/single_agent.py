@@ -33,21 +33,9 @@ class Agent(BaseAgent):
         if self._initialized:
             return
 
-        if not all([self.azure_openai_key, self.azure_deployment, self.azure_openai_endpoint, self.api_version]):
-            raise RuntimeError(
-                "Azure OpenAI configuration is incomplete. Ensure AZURE_OPENAI_API_KEY, "
-                "AZURE_OPENAI_CHAT_DEPLOYMENT, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_API_VERSION are set."
-            )
-
         headers = self._build_headers()
         mcp_tools = await self._maybe_create_tools(headers)
-
-        chat_client = AzureOpenAIChatClient(
-            api_key=self.azure_openai_key,
-            deployment_name=self.azure_deployment,
-            endpoint=self.azure_openai_endpoint,
-            api_version=self.api_version,
-        )
+        chat_client = self.create_azure_openai_chat_client()
 
         instructions = (
             "You are a helpful assistant. You can use multiple tools to find information and answer questions. "

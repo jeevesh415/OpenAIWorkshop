@@ -35,6 +35,7 @@ import {
   TrendingUp as ProgressIcon,
   CheckCircleOutline as ResultIcon,
   ExpandMore as ExpandMoreIcon,
+  Analytics as AnalyticsIcon,
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import { v4 as uuidv4 } from 'uuid';
@@ -69,6 +70,7 @@ function App() {
   const [currentAgents, setCurrentAgents] = useState(new Set());
   const [currentTurn, setCurrentTurn] = useState(0); // Track conversation turn for tool call grouping
   const [lastFinalAnswer, setLastFinalAnswer] = useState(null); // Track last final answer for deduplication
+  const [evalResults, setEvalResults] = useState({}); // Track eval results by message index
 
   const wsRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -274,6 +276,30 @@ function App() {
         setIsProcessing(false);
         break;
 
+      case 'eval_result':
+        // Store eval result for the last assistant message
+        setEvalResults((prev) => {
+          // Find the index of the last assistant message
+          // We'll update this when we get the message count from messages state
+          return {
+            ...prev,
+            [Date.now()]: event, // Use timestamp as key, will match to last assistant message
+          };
+        });
+        // Also attach to the last assistant message
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          // Find last assistant message and attach eval
+          for (let i = newMessages.length - 1; i >= 0; i--) {
+            if (newMessages[i].role === 'assistant') {
+              newMessages[i] = { ...newMessages[i], evalResult: event };
+              break;
+            }
+          }
+          return newMessages;
+        });
+        break;
+
       case 'error':
         console.error('Backend error:', event.message);
         setMessages((prev) => [
@@ -337,6 +363,7 @@ function App() {
     setCurrentAgents(new Set());
     setCurrentTurn(0);
     setLastFinalAnswer(null);
+    setEvalResults({});
 
     // Close existing WebSocket
     if (wsRef.current) {
@@ -509,13 +536,7 @@ function App() {
                           ))}
                       </Box>
                     )}
-                    <Card variant="outlined" sx={{ bgcolor: '#fff3e0' }}>
-                      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                          {agentData.finalMessage || agentData.tokens.join('')}
-                        </Typography>
-                      </CardContent>
-                    </Card>
+                    {/* Intentionally omit full agent response here; main chat shows it. */}
                   </AccordionDetails>
                 </Accordion>
               );
@@ -532,7 +553,7 @@ function App() {
               <Accordion key={agentId} defaultExpanded>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Typography sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    🔧 Tool Calls
+                    🔧 Tool Calls  {agentData.name}
                   </Typography>
                 </AccordionSummary>
                 <AccordionDetails>
@@ -628,6 +649,51 @@ function App() {
                     {msg.timestamp.toLocaleTimeString()}
                   </Typography>
                   <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  
+                  {/* Eval Results Display - DISABLED FOR NOW, NEEDS REFINEMENT
+                  {msg.evalResult && (
+                    <Accordion sx={{ mt: 2, bgcolor: msg.evalResult.passed ? '#e8f5e9' : '#fff3e0' }}>
+                      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                          <AnalyticsIcon fontSize="small" color={msg.evalResult.passed ? 'success' : 'warning'} />
+                          <Typography variant="subtitle2">
+                            AI Evaluation: {msg.evalResult.passed ? '✓ PASS' : '⚠ NEEDS REVIEW'} ({Math.round(msg.evalResult.overall_score * 100)}%)
+                          </Typography>
+                        </Box>
+                      </AccordionSummary>
+                      <AccordionDetails>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                          {Object.entries(msg.evalResult.metrics || {}).map(([key, metric]) => {
+                            const score = metric.score;
+                            const displayName = metric.display_name || key;
+                            const isHardGate = metric.is_hard_gate;
+                            const scoreColor = score >= 0.7 ? 'success' : score >= 0.5 ? 'warning' : 'error';
+                            
+                            return (
+                              <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Typography variant="body2" sx={{ minWidth: 120 }}>
+                                  {displayName}:
+                                </Typography>
+                                <LinearProgress
+                                  variant="determinate"
+                                  value={score * 100}
+                                  color={scoreColor}
+                                  sx={{ flexGrow: 1, height: 8, borderRadius: 4 }}
+                                />
+                                <Typography variant="body2" sx={{ minWidth: 50, textAlign: 'right' }}>
+                                  {Math.round(score * 100)}%
+                                </Typography>
+                                {isHardGate && (
+                                  <Chip label="Required" size="small" color={score >= 0.9 ? 'success' : 'error'} />
+                                )}
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      </AccordionDetails>
+                    </Accordion>
+                  )}
+                  */}
                 </Paper>
               ))}
 

@@ -17,8 +17,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 # Install all dependencies (including uvicorn) into /app/.venv
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+# Note: avoid BuildKit-only --mount syntax so ACR Tasks can build this
+RUN uv sync --frozen --no-dev
 
 # Now bring in the actual source code
 # applications package (where backend.py lives)

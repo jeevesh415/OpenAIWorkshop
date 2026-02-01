@@ -17,8 +17,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 # Install all dependencies (including uvicorn) into /app/.venv
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+# Note: we avoid Docker BuildKit-only --mount options so this works in ACR.
+RUN uv sync --frozen --no-dev
 
 COPY . .
 

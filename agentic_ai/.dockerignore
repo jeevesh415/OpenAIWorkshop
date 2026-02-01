@@ -1,0 +1,12 @@
+.venv
+__pycache__/
+react-frontend/
+applications/react-frontend/
+applications/react-frontend/**
+node_modules/
+**/node_modules/
+evaluations/
+*.pyc
+*.log
+.git/
+.env

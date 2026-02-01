@@ -64,28 +64,48 @@ from evaluations import AgentEvaluationRunner, AgentTrace
 from applications.utils import get_state_store
 
 
+class ToolCallTracker:
+    """Captures tool calls emitted via the agent's WebSocket-style broadcast.
+
+    This mirrors the lightweight tracker used in run_batch_eval.py: any
+    broadcast message with type == "tool_called" is recorded so that the
+    evaluator can score tool usage and completeness for Agent Framework
+    agents (including the handoff multi-domain pattern).
+    """
+
+    def __init__(self) -> None:
+        self.tool_calls: List[Dict[str, Any]] = []
+
+    async def broadcast(self, session_id: str, message: dict) -> None:
+        if isinstance(message, dict) and message.get("type") == "tool_called":
+            tool_name = message.get("tool_name")
+            if tool_name:
+                # Evaluator only needs the tool name; args/results are optional
+                self.tool_calls.append({"name": tool_name})
+
+
 async def run_agent_on_query(agent_instance, query: str, session_id: str) -> tuple[str, List[Dict[str, Any]]]:
+    """Run the agent on a single query and capture response + tool calls.
+
+    For Agent Framework agents (single, handoff, reflection, etc.), we inject a
+    ToolCallTracker via set_websocket_manager so that tool_called events emitted
+    during MCP tool invocations are captured for evaluation.
     """
-    Run the agent on a single query and capture response + tool calls.
-    Mimics how backend.py runs agents.
-    
-    Args:
-        agent_instance: The instantiated agent
-        query: Customer query
-        session_id: Session/thread ID
-        
-    Returns:
-        (response_text, tool_calls)
-    """
-    captured_tools = []
-    
+    captured_tools: List[Dict[str, Any]] = []
+
+    # Inject tool-call tracker if the agent supports a WebSocket manager
+    tracker: ToolCallTracker | None = None
+    if hasattr(agent_instance, "set_websocket_manager"):
+        tracker = ToolCallTracker()
+        agent_instance.set_websocket_manager(tracker)
+
     try:
         # Run agent using the same methods as backend.py
         if hasattr(agent_instance, "chat_async"):
             # Agent Framework agents
             result = await agent_instance.chat_async(query)
             response_text = str(result) if result else "No response"
-            
+
         elif hasattr(agent_instance, "chat_stream"):
             # Autogen streaming agents - collect full response
             response_parts = []
@@ -93,25 +113,29 @@ async def run_agent_on_query(agent_instance, query: str, session_id: str) -> tup
                 if hasattr(event, 'content'):
                     response_parts.append(str(event.content))
             response_text = " ".join(response_parts) if response_parts else "No response"
-            
+
         else:
             # Fallback: try calling agent directly
             result = await agent_instance(query)
             response_text = str(result) if result else "No response"
-        
-        # Extract tool calls from agent
-        if hasattr(agent_instance, 'get_tool_calls'):
-            captured_tools = agent_instance.get_tool_calls()
-        elif hasattr(agent_instance, '_tool_calls'):
-            captured_tools = agent_instance._tool_calls
-        elif hasattr(agent_instance, 'tool_calls'):
-            captured_tools = agent_instance.tool_calls
-    
+
+        # Prefer tools captured via tracker for Agent Framework agents
+        if tracker is not None and tracker.tool_calls:
+            captured_tools = tracker.tool_calls
+        else:
+            # Fallbacks for agents that expose tool calls directly
+            if hasattr(agent_instance, 'get_tool_calls'):
+                captured_tools = agent_instance.get_tool_calls()
+            elif hasattr(agent_instance, '_tool_calls'):
+                captured_tools = agent_instance._tool_calls  # type: ignore[attr-defined]
+            elif hasattr(agent_instance, 'tool_calls'):
+                captured_tools = agent_instance.tool_calls  # type: ignore[attr-defined]
+
     except Exception as e:
         print(f"  ⚠ Error running agent: {e}")
         response_text = f"Error: {str(e)}"
         captured_tools = []
-    
+
     return response_text, captured_tools
 
 

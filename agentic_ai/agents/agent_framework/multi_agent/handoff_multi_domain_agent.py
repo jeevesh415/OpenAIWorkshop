@@ -259,12 +259,6 @@ class Agent(BaseAgent):
         if self._initialized:
             return
 
-        if not all([self.azure_openai_key, self.azure_deployment, self.azure_openai_endpoint, self.api_version]):
-            raise RuntimeError(
-                "Azure OpenAI configuration is incomplete. Ensure AZURE_OPENAI_API_KEY, "
-                "AZURE_OPENAI_CHAT_DEPLOYMENT, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_API_VERSION are set."
-            )
-
         headers = self._build_headers()
         base_mcp_tool = await self._create_mcp_tool(headers)
 
@@ -273,12 +267,7 @@ class Agent(BaseAgent):
             await base_mcp_tool.__aenter__()
             logger.info(f"[HANDOFF] Connected to MCP server, loaded {len(base_mcp_tool.functions)} tools")
 
-        chat_client = AzureOpenAIChatClient(
-            api_key=self.azure_openai_key,
-            deployment_name=self.azure_deployment,
-            endpoint=self.azure_openai_endpoint,
-            api_version=self.api_version,
-        )
+        chat_client = self.create_azure_openai_chat_client()
 
         # Create all domain specialist agents with filtered tools
         for domain_id, domain_config in DOMAINS.items():
@@ -413,6 +402,33 @@ class Agent(BaseAgent):
         Returns:
             Dictionary with keys: domain, is_domain_change, confidence, reasoning
         """
+        # Special-case simple greeting messages so we don't route immediately
+        # to a specialist. The supervisor/intent layer can respond directly.
+        normalized = user_message.strip().lower()
+        simple_greetings = [
+            "hi",
+            "hello",
+            "hey",
+            "hi there",
+            "hello there",
+            "good morning",
+            "good afternoon",
+            "good evening",
+        ]
+
+        # Strip common punctuation for matching
+        normalized_plain = re.sub(r"[!.,?]", "", normalized)
+
+        if normalized_plain in simple_greetings:
+            logger.info("[HANDOFF] Detected simple greeting; handling directly without specialist routing")
+            return {
+                "domain": self._default_domain,
+                "is_domain_change": False,
+                "confidence": 1.0,
+                "reasoning": "Greeting-only message; handled by supervisor",
+                "handle_directly": True,
+            }
+
         # If no current domain, route to default domain
         if not current_domain:
             return {
@@ -429,15 +445,31 @@ class Agent(BaseAgent):
         )
 
         try:
-            # Use OpenAI client directly for structured output support
+            # Use Azure OpenAI with Entra ID (RBAC) for structured output support.
+            # This mirrors the RBAC pattern used elsewhere in the project so that
+            # intent classification works even when key-based auth is disabled.
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
             from openai import AsyncAzureOpenAI
-            
-            client = AsyncAzureOpenAI(
-                api_key=self.azure_openai_key,
-                api_version=self.api_version,
-                azure_endpoint=self.azure_openai_endpoint,
+
+            # Ensure core Azure OpenAI settings are available
+            if not all([self.azure_deployment, self.azure_openai_endpoint, self.api_version]):
+                raise RuntimeError(
+                    "Azure OpenAI configuration is incomplete for intent classification. "
+                    "Set AZURE_OPENAI_CHAT_DEPLOYMENT, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_API_VERSION."
+                )
+
+            # RBAC token provider using the same scope as other Azure OpenAI calls
+            token_provider = get_bearer_token_provider(
+                DefaultAzureCredential(),
+                "https://cognitiveservices.azure.com/.default",
             )
-            
+
+            client = AsyncAzureOpenAI(
+                azure_endpoint=self.azure_openai_endpoint,
+                api_version=self.api_version,
+                azure_ad_token_provider=token_provider,
+            )
+
             # Use beta API with structured output
             completion = await client.beta.chat.completions.parse(
                 model=self.azure_deployment,
@@ -504,6 +536,40 @@ class Agent(BaseAgent):
             # Run intent classification before routing
             logger.info(f"[HANDOFF] Running upfront classification (first_message={is_first_message}, lazy={self._lazy_classification})")
             intent = await self._classify_intent(prompt, self._current_domain)
+
+            # If the classifier chose to handle this turn directly (e.g. greeting),
+            # respond without invoking any specialist agents.
+            if intent.get("handle_directly"):
+                assistant_response = (
+                    "Hi! I'm your Contoso support assistant. I can help with billing, "
+                    "products & promotions, or security & authentication issues. "
+                    "Please tell me briefly what you need help with."
+                )
+
+                # Send final result to UI without a specialist agent
+                if self._ws_manager:
+                    await self._ws_manager.broadcast(
+                        self.session_id,
+                        {
+                            "type": "final_result",
+                            "content": assistant_response,
+                        },
+                    )
+
+                # Update chat history and state but keep current_domain unchanged
+                messages = [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": assistant_response},
+                ]
+                self.append_to_chat_history(messages)
+
+                self._setstate({
+                    "mode": "handoff_multi_domain",
+                    "current_domain": self._current_domain,
+                })
+
+                return assistant_response
+
             target_domain = intent["domain"]
             is_domain_change = intent["is_domain_change"]
             
@@ -548,7 +614,9 @@ class Agent(BaseAgent):
                 actual_prompt = f"{context_prefix}\n\n{prompt}"
                 logger.info(f"[HANDOFF] Added context prefix to prompt for {target_domain}")
 
-        # Notify UI that agent started
+        # Notify UI that agent started. The React UI will show
+        # which agent handled the turn and the tools used, but
+        # is responsible for not duplicating the full answer.
         if self._ws_manager:
             await self._ws_manager.broadcast(
                 self.session_id,
@@ -556,12 +624,13 @@ class Agent(BaseAgent):
                     "type": "agent_start",
                     "agent_id": target_domain,
                     "agent_name": DOMAINS[target_domain]["name"],
-                    "show_message_in_internal_process": is_domain_change,  # Show handoff in left panel
+                    "show_message_in_internal_process": True,
                 },
             )
 
         # Stream response from specialist agent
         full_response = []
+        tools_used: List[str] = []
         
         try:
             async for chunk in agent.run_stream(actual_prompt, thread=thread):
@@ -570,13 +639,17 @@ class Agent(BaseAgent):
                     for content in chunk.contents:
                         # Check for tool/function calls
                         if content.type == "function_call":
-                            if self._ws_manager:
+                            tool_name = getattr(content, "name", None)
+                            if tool_name:
+                                tools_used.append(tool_name)
+
+                            if self._ws_manager and tool_name:
                                 await self._ws_manager.broadcast(
                                     self.session_id,
                                     {
                                         "type": "tool_called",
                                         "agent_id": target_domain,
-                                        "tool_name": content.name,
+                                        "tool_name": tool_name,
                                         "turn": self._current_turn,
                                     },
                                 )
@@ -642,7 +715,7 @@ class Agent(BaseAgent):
                 context_prefix = await self._build_context_prefix(target_domain, new_target_domain)
                 actual_prompt_handoff = f"{context_prefix}\n\n{prompt}" if context_prefix else prompt
                 
-                # Notify UI
+                # Notify UI that a new domain agent has been selected
                 if self._ws_manager:
                     await self._ws_manager.broadcast(
                         self.session_id,
@@ -661,13 +734,17 @@ class Agent(BaseAgent):
                         if hasattr(chunk, 'contents') and chunk.contents:
                             for content in chunk.contents:
                                 if content.type == "function_call":
-                                    if self._ws_manager:
+                                    tool_name = getattr(content, "name", None)
+                                    if tool_name:
+                                        tools_used.append(tool_name)
+
+                                    if self._ws_manager and tool_name:
                                         await self._ws_manager.broadcast(
                                             self.session_id,
                                             {
                                                 "type": "tool_called",
                                                 "agent_id": new_target_domain,
-                                                "tool_name": content.name,
+                                                "tool_name": tool_name,
                                                 "turn": self._current_turn,
                                             },
                                         )
@@ -692,6 +769,13 @@ class Agent(BaseAgent):
                 assistant_response = ''.join(full_response_handoff)
                 target_domain = new_target_domain
                 thread = new_thread
+
+        # Persist tools used for this turn so non-streaming callers (e.g. /chat
+        # endpoint and offline evaluation) can retrieve them from state_store.
+        try:
+            self.state_store[f"{self.session_id}_last_tools"] = tools_used
+        except Exception as exc:
+            logger.warning(f"[HANDOFF] Failed to persist tools for session {self.session_id}: {exc}")
 
         # Send final result
         if self._ws_manager:

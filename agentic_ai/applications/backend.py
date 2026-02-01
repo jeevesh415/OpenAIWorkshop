@@ -66,7 +66,12 @@ def verify_token(authorization: str | None = Header(None, alias="Authorization")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  
 agent_module_path = os.getenv("AGENT_MODULE")  
 agent_module = __import__(agent_module_path, fromlist=["Agent"])  # type: ignore[arg-type]  
-Agent = getattr(agent_module, "Agent")  
+Agent = getattr(agent_module, "Agent")
+
+# ------------------------------------------------------------------  
+# Real-time evaluator for scoring responses (DISABLED - using batch evals instead)  
+# ------------------------------------------------------------------  
+# from evaluations.realtime_evaluator import evaluate_chat_response  
   
 # ------------------------------------------------------------------  
 # Get the correct state-store implementation  
@@ -128,7 +133,8 @@ class ChatRequest(BaseModel):
   
   
 class ChatResponse(BaseModel):  
-    response: str  
+    response: str
+    tools_used: List[str] | None = None  
   
   
 class ConversationHistoryResponse(BaseModel):  
@@ -146,8 +152,13 @@ async def chat(req: ChatRequest, token: str = Depends(verify_token)):
         agent = Agent(STATE_STORE, req.session_id, access_token=token)
     except TypeError:
         agent = Agent(STATE_STORE, req.session_id)
-    answer = await agent.chat_async(req.prompt)  
-    return ChatResponse(response=answer)  
+
+    answer = await agent.chat_async(req.prompt)
+
+    # Retrieve tools used for this turn from the agent's state store (if available)
+    tools_used = STATE_STORE.get(f"{req.session_id}_last_tools", [])
+
+    return ChatResponse(response=answer, tools_used=tools_used)  
   
 @app.post("/reset_session")  
 async def reset_session(req: SessionResetRequest, token: str = Depends(verify_token)):  
@@ -214,8 +225,9 @@ async def ws_chat(ws: WebSocket):
                     # Autogen streaming
                     async for event in agent.chat_stream(prompt):
                         evt = await serialize_autogen_event(event)
-                        if evt and evt.get("type") in ("token", "message", "final"):
-                            await MANAGER.broadcast(session_id, evt)
+                        if evt:
+                            if evt.get("type") in ("token", "message", "final", "tool_call"):
+                                await MANAGER.broadcast(session_id, evt)
                 elif hasattr(agent, "chat_async"):
                     # Agent Framework - may or may not use streaming callback
                     result = await agent.chat_async(prompt)
@@ -226,6 +238,15 @@ async def ws_chat(ws: WebSocket):
                     # Else: events including final result are sent via streaming callback
                 else:
                     await MANAGER.broadcast(session_id, {"type": "error", "message": "Agent does not support streaming"})
+
+                # Real-time eval disabled - using batch evals instead
+                # if final_response:
+                #     eval_result = evaluate_chat_response(
+                #         query=prompt,
+                #         response=final_response,
+                #         tool_calls=collected_tool_calls,
+                #     )
+                #     await MANAGER.broadcast(session_id, eval_result)
 
                 await MANAGER.broadcast(session_id, {"type": "done"})
             except Exception as e:
