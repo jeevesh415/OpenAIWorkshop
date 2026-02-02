@@ -5,10 +5,12 @@ from typing import Dict, Any
 from azure.ai.evaluation import evaluate
 
 from metrics import (
-    ToolUsageEvaluator,
+    ToolBehaviorEvaluator,
     CompletenessEvaluator,
+    EfficiencyEvaluator,
     ResponseQualityEvaluator,
-    AccuracyEvaluator,
+    GroundedAccuracyEvaluator,
+    SafetyEvaluator,
     EvaluationResult,
 )
 
@@ -22,12 +24,13 @@ def main() -> None:
             f"{data_path} not found. Run collect_agent_runs.py first to generate it."
         )
 
-    # Instantiate our custom, non-LLM metrics to mirror the local
-    # AgentEvaluationRunner behavior.
-    tool_eval = ToolUsageEvaluator()
+    # Instantiate our custom, non-LLM metrics using the updated metrics.py.
+    tool_eval = ToolBehaviorEvaluator()
     completeness_eval = CompletenessEvaluator()
-    quality_eval = ResponseQualityEvaluator(azure_openai_client=None)
-    accuracy_eval = AccuracyEvaluator()
+    efficiency_eval = EfficiencyEvaluator()
+    quality_eval = ResponseQualityEvaluator(llm_client=None)
+    accuracy_eval = GroundedAccuracyEvaluator(llm_client=None)
+    safety_eval = SafetyEvaluator()
 
     # Single custom evaluator that computes all Contoso metrics for a row.
     def contoso_evaluator(
@@ -48,48 +51,61 @@ def main() -> None:
 
         actual_tools = [call.get("name", "") for call in tool_calls_list if isinstance(call, dict)]
 
-        # 1. Tool usage
+        # 1. Tool behavior (recall/precision/efficiency over tools)
         tool_result = tool_eval.evaluate(
             expected_tools=expected_tools_list,
             actual_tools=actual_tools,
             required_tools=required_tools_list,
         )
 
-        # 2. Completeness (criteria + tools)
+        # 2. Completeness (tool-based criteria only; semantic parts are handled
+        # by the response-quality metric when an LLM judge is available).
         completeness_result = completeness_eval.evaluate(
             success_criteria=success_criteria or {},
-            agent_response=response,
             tool_calls=tool_calls_list,
         )
 
-        # 3. Response quality (basic checks only; no judge LLM)
+        # 3. Step efficiency: how many calls did we make vs how many tools were
+        # required as a baseline.
+        efficiency_result = efficiency_eval.evaluate(
+            actual_tool_calls=len(actual_tools),
+            required_tools=len(required_tools_list) if required_tools_list else 0,
+        )
+
+        # 4. Response quality (basic checks only; no judge LLM in this env).
         quality_result = quality_eval.evaluate(
             query=query,
             response=response,
-            context={"tool_calls": actual_tools},
+            tool_summary=None,
         )
 
-        # 4. Accuracy (placeholder, as in local runner)
+        # 5. Grounded accuracy (LLM-assisted in the future; default pass now).
         accuracy_result = accuracy_eval.evaluate(
             response=response,
-            ground_truth=None,
-            tool_results=None,
+            tool_outputs=None,
         )
+
+        # 6. Safety / overreach: detect risky promises or actions.
+        safety_result = safety_eval.evaluate(response=response)
 
         metrics: list[EvaluationResult] = [
             tool_result,
             completeness_result,
+            efficiency_result,
             quality_result,
             accuracy_result,
+            safety_result,
         ]
 
         # Weighted overall score, matching AgentEvaluationRunner.
         weights = {
-            "tool_usage": 0.3,
-            "completeness": 0.3,
-            "response_quality_llm": 0.25,
-            "response_quality_basic": 0.25,
-            "accuracy": 0.15,
+            "tool_behavior": 0.3,
+            "completeness": 0.25,
+            "step_efficiency": 0.1,
+            "response_quality_basic": 0.2,
+            "response_quality": 0.2,
+            "grounded_accuracy": 0.1,
+            "safety": 0.05,
         }
 
         total_score = 0.0
@@ -103,14 +119,18 @@ def main() -> None:
         overall_passed = overall_score >= 0.7 and all(m.passed for m in metrics)
 
         return {
-            "tool_usage.score": tool_result.score,
-            "tool_usage.passed": 1.0 if tool_result.passed else 0.0,
+            "tool_behavior.score": tool_result.score,
+            "tool_behavior.passed": 1.0 if tool_result.passed else 0.0,
             "completeness.score": completeness_result.score,
             "completeness.passed": 1.0 if completeness_result.passed else 0.0,
+            "step_efficiency.score": efficiency_result.score,
+            "step_efficiency.passed": 1.0 if efficiency_result.passed else 0.0,
             "response_quality.score": quality_result.score,
             "response_quality.passed": 1.0 if quality_result.passed else 0.0,
             "accuracy.score": accuracy_result.score,
             "accuracy.passed": 1.0 if accuracy_result.passed else 0.0,
+            "safety.score": safety_result.score,
+            "safety.passed": 1.0 if safety_result.passed else 0.0,
             "overall.score": overall_score,
             "overall.passed": 1.0 if overall_passed else 0.0,
         }

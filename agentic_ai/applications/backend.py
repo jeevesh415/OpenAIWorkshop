@@ -20,10 +20,15 @@ from pydantic import BaseModel
 from dotenv import load_dotenv  
 from fastapi import FastAPI, Depends, Header, WebSocket, WebSocketDisconnect
 
+from telemetry import setup_telemetry
+
 # ------------------------------------------------------------------  
 # Environment  
 # ------------------------------------------------------------------  
 load_dotenv()  # read .env if present  
+
+# Optional: configure Azure Monitor / Application Insights tracing from env
+setup_telemetry()
 
 # Feature flag: disable auth for local dev / demos
 DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").lower() in ("1", "true", "yes")

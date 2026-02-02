@@ -6,10 +6,10 @@ Evaluation toolkit for testing AI agents against business scenarios.
 
 from .evaluator import AgentEvaluationRunner, AgentTrace, TestCaseResult
 from .metrics import (
-    ToolUsageEvaluator,
+    ToolBehaviorEvaluator,
     CompletenessEvaluator,
     ResponseQualityEvaluator,
-    AccuracyEvaluator,
+    GroundedAccuracyEvaluator,
     EvaluationResult,
     MetricType
 )
@@ -18,10 +18,10 @@ __all__ = [
     "AgentEvaluationRunner",
     "AgentTrace",
     "TestCaseResult",
-    "ToolUsageEvaluator",
+    "ToolBehaviorEvaluator",
     "CompletenessEvaluator",
     "ResponseQualityEvaluator",
-    "AccuracyEvaluator",
+    "GroundedAccuracyEvaluator",
     "EvaluationResult",
     "MetricType"
 ]

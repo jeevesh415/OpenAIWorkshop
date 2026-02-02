@@ -11,10 +11,10 @@ from dataclasses import dataclass, asdict
 import sys
 
 from metrics import (
-    ToolUsageEvaluator,
+    ToolBehaviorEvaluator,
     CompletenessEvaluator,
     ResponseQualityEvaluator,
-    AccuracyEvaluator,
+    GroundedAccuracyEvaluator,
     EvaluationResult
 )
 
@@ -59,10 +59,10 @@ class AgentEvaluationRunner:
         self.test_cases = self._load_dataset()
         
         # Initialize evaluators
-        self.tool_evaluator = ToolUsageEvaluator()
+        self.tool_evaluator = ToolBehaviorEvaluator()
         self.completeness_evaluator = CompletenessEvaluator()
         self.quality_evaluator = ResponseQualityEvaluator(azure_openai_client)
-        self.accuracy_evaluator = AccuracyEvaluator()
+        self.accuracy_evaluator = GroundedAccuracyEvaluator()
     
     def _load_dataset(self) -> List[Dict[str, Any]]:
         """Load evaluation dataset from JSON."""
@@ -105,27 +105,24 @@ class AgentEvaluationRunner:
         # 2. Evaluate completeness
         completeness_result = self.completeness_evaluator.evaluate(
             success_criteria=test_case.get("success_criteria", {}),
-            agent_response=agent_trace.response,
             tool_calls=agent_trace.tool_calls
         )
         metrics.append(completeness_result)
         
-        # 3. Evaluate response quality
+        # 3. Evaluate response quality  
+        tool_summary = f"Tools used: {', '.join(tool_names)}" if tool_names else "No tools used"
         quality_result = self.quality_evaluator.evaluate(
             query=agent_trace.query,
             response=agent_trace.response,
-            context={
-                "tool_calls": tool_names,
-                "expected_systems": test_case.get("expected_systems_accessed", [])
-            }
+            tool_summary=tool_summary
         )
         metrics.append(quality_result)
         
         # 4. Evaluate accuracy (if ground truth available)
+        tool_outputs = "; ".join([str(call.get("result", "")) for call in agent_trace.tool_calls if call.get("result")])
         accuracy_result = self.accuracy_evaluator.evaluate(
             response=agent_trace.response,
-            ground_truth=test_case.get("ground_truth"),
-            tool_results=[call.get("result") for call in agent_trace.tool_calls]
+            tool_outputs=tool_outputs if tool_outputs else None
         )
         metrics.append(accuracy_result)
         

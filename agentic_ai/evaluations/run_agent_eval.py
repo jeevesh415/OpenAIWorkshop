@@ -29,6 +29,17 @@ from typing import Any, Dict, List
 warnings.filterwarnings("ignore", message=".*async_generator.*")
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*cancel scope.*")
 
+# Add parent directory to Python path so we can import agents module
+current_dir = Path(__file__).parent
+parent_dir = current_dir.parent
+sys.path.insert(0, str(parent_dir))
+
+# Debug: Print the path that was added
+print(f"🔍 Added to Python path: {parent_dir}")
+print(f"🔍 Agents directory exists: {(parent_dir / 'agents').exists()}")
+
+# Note: No telemetry setup needed - using HTTP requests to backend with telemetry
+
 # Suppress asyncio error logs about async generator cleanup
 logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 
@@ -142,26 +153,32 @@ async def run_agent_on_query(agent_instance, query: str, session_id: str) -> tup
 async def main():
     """Main evaluation entry point."""
     
-    # 1. Load agent module from .env (same as backend.py)
-    agent_module_path = os.getenv("AGENT_MODULE")
-    if not agent_module_path:
-        print("❌ ERROR: AGENT_MODULE not set in .env file")
-        print(f"   Please configure in: {env_path}")
-        return
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description="Run agent evaluations")
+    parser.add_argument("--agent-name", default="agent_eval", help="Name for telemetry tracking")
+    parser.add_argument("--backend-url", default="http://localhost:7002", help="Backend URL to send requests to")
+    args = parser.parse_args()
     
-    print(f"\n📦 Loading agent: {agent_module_path}")
+    agent_name = args.agent_name
+    backend_url = args.backend_url
     
+    print(f"Using backend: {backend_url}")
+    print(f"Agent name: {agent_name}")
+    
+    # 1. No need to load agent module - we're sending HTTP requests
+    print(f"\n🌐 Using HTTP requests to backend instead of direct agent creation")
+    
+    # 2. Test backend connection
     try:
-        agent_module = __import__(agent_module_path, fromlist=["Agent"])
-        Agent = getattr(agent_module, "Agent")
-        print(f"✓ Agent class loaded successfully")
+        import httpx
+        async with httpx.AsyncClient() as client:
+            health_response = await client.get(f"{backend_url}/health", timeout=5.0)
+            print(f"✓ Backend is responding")
     except Exception as e:
-        print(f"❌ Failed to load agent: {e}")
+        print(f"❌ Cannot connect to backend: {e}")
+        print(f"   Make sure backend is running on {backend_url}")
         return
-    
-    # 2. Initialize state store (same as backend)
-    state_store = get_state_store()
-    print(f"✓ State store initialized: {type(state_store).__name__}")
     
     # 3. Check MCP server
     mcp_uri = os.getenv("MCP_SERVER_URI", "http://localhost:8000/mcp")
@@ -205,24 +222,35 @@ async def main():
         print(f"[{i}/{len(test_cases)}] {test_id}")
         print(f"Query: {query[:80]}...")
         
-        # Create agent instance for this session
-        session_id = f"eval_{test_id}"
+        # Send HTTP request to backend instead of creating agent directly
+        session_id = f"{agent_name}_eval_{test_id}"
         
         try:
-            # Initialize agent with session_id (required by most agents)
-            init_params = Agent.__init__.__code__.co_varnames
+            import httpx
             
-            if 'session_id' in init_params and 'state_store' in init_params:
-                agent = Agent(state_store=state_store, session_id=session_id)
-            elif 'session_id' in init_params:
-                agent = Agent(session_id=session_id)
-            elif 'state_store' in init_params:
-                agent = Agent(state_store=state_store)
-            else:
-                agent = Agent()
+            # Send request to local backend
+            request_data = {
+                "prompt": query,
+                "session_id": session_id
+            }
             
-            # Run agent
-            response, tool_calls = await run_agent_on_query(agent, query, session_id)
+            async with httpx.AsyncClient() as client:
+                response_obj = await client.post(
+                    f"{backend_url}/chat",
+                    json=request_data,
+                    timeout=60.0
+                )
+                response_obj.raise_for_status()
+                
+                result = response_obj.json()
+                response = result.get("response", "")
+                tools_used = result.get("tools_used", [])
+                
+                # Convert tools_used (List[str]) to tool_calls format expected by evaluator
+                tool_calls = [
+                    {"name": tool_name, "args": {}}
+                    for tool_name in (tools_used or [])
+                ]
             
             print(f"  ✓ Response: {response[:100]}...")
             print(f"  ✓ Tools called: {len(tool_calls)}")
@@ -234,15 +262,14 @@ async def main():
                 tool_calls=tool_calls,  # THIS is what evaluator.py uses!
                 metadata={
                     "test_id": test_id,
-                    "agent_module": agent_module_path,
+                    "agent_backend": backend_url,
                     "session_id": session_id,
                     "augmented_query": query  # Store augmented query in metadata
                 }
             )
             traces.append(trace)
             
-            # Cleanup: Allow agent resources to be garbage collected
-            del agent
+            # No cleanup needed for HTTP requests
             
         except Exception as e:
             print(f"  ❌ Error: {e}")
@@ -253,7 +280,7 @@ async def main():
                 tool_calls=[],
                 metadata={
                     "test_id": test_id,
-                    "agent_module": agent_module_path,
+                    "agent_backend": backend_url,
                     "error": str(e)
                 }
             )
@@ -261,7 +288,39 @@ async def main():
         
         print()
     
-    # 6. Run evaluation
+    # 6. Generate evaluation_input_data.jsonl for Foundry integration
+    print(f"{'=' * 80}")
+    print(f"GENERATING FOUNDRY DATA FILE")
+    print(f"{'=' * 80}\n")
+    
+    foundry_data_file = Path(__file__).parent / "evaluation_input_data.jsonl"
+    with open(foundry_data_file, 'w') as f:
+        for trace in traces:
+            # Extract test case data from metadata
+            test_id = trace.metadata.get("test_id", "unknown")
+            
+            # Find matching test case from original dataset
+            matching_test = None
+            for test_case in test_cases:
+                if test_case.get("id") == test_id:
+                    matching_test = test_case
+                    break
+            
+            # Prepare data in format expected by run_eval.py
+            foundry_row = {
+                "query": trace.query,
+                "response": trace.response,
+                "expected_tools": matching_test.get("expected_tools", []) if matching_test else [],
+                "required_tools": matching_test.get("required_tools", []) if matching_test else [],
+                "success_criteria": matching_test.get("success_criteria", {}) if matching_test else {},
+                "tool_calls": [{"name": tc["name"], "args": tc.get("args", {})} for tc in trace.tool_calls]
+            }
+            
+            f.write(json.dumps(foundry_row) + '\n')
+    
+    print(f"✓ Generated {foundry_data_file} with {len(traces)} evaluation rows")
+    
+    # 7. Run evaluation
     print(f"{'=' * 80}")
     print(f"EVALUATING RESULTS")
     print(f"{'=' * 80}\n")
@@ -274,7 +333,7 @@ async def main():
     
     # 7. Display summary
     print(f"\n{'=' * 80}")
-    print(f"EVALUATION SUMMARY - {agent_module_path}")
+    print(f"EVALUATION SUMMARY - {backend_url}")
     print(f"{'=' * 80}")
     print(f"Total Tests:    {summary['total_tests']}")
     print(f"Passed:         {summary['passed']} ✓")
