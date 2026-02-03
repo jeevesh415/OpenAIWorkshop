@@ -2,7 +2,13 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
+from dotenv import load_dotenv
 from azure.ai.evaluation import evaluate
+
+# Load environment variables from .env file
+# Look for .env in the applications folder (sibling directory)
+env_path = Path(__file__).resolve().parent.parent / "applications" / ".env"
+load_dotenv(env_path)
 
 from metrics import (
     ToolBehaviorEvaluator,

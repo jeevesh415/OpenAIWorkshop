@@ -12,23 +12,218 @@ This evaluation framework tests your AI agents against real customer support sce
 - **Efficiency**: Does the agent work efficiently without unnecessary steps?
 - **Safety**: Does the agent avoid making promises it can't keep?
 
-## Quick Start
+## Step-by-Step Setup Guide
 
-### Prerequisites
-1. **MCP Server Running**: `cd mcp && uv run python mcp_service.py`
-2. **Backend Running**: `cd agentic_ai/applications && uv run uvicorn backend:app --port 7002`
-3. **Environment Variables**: Ensure `.env` is configured in `agentic_ai/applications/`
+**Prerequisites**: You'll need an Azure AI Project (Cognitive Services resource) provisioned in Azure, plus optionally Azure OpenAI for LLM-as-judge evaluation.
 
-### Run Evaluation (2-Step Process)
+Follow these steps to get the evaluation system working:
+
+### **Step 1: Clone and Setup Repository**
+```bash
+# Clone the repo
+git clone https://github.com/microsoft/OpenAIWorkshop.git
+cd OpenAIWorkshop
+
+# Switch to your branch with telemetry changes
+git checkout heena-dev2
+
+# Install dependencies
+uv sync
+```
+
+### **Step 2: Azure Authentication Setup**
+```bash
+# Login to Azure
+az login
+
+# Set subscription (replace with your subscription)
+az account set --subscription "your-subscription-id"
+
+# Verify authentication
+az account show
+```
+
+### **Step 3: Get Azure AI Project Details**
+```bash
+# Option 1: Azure CLI (if you know your resource group)
+az cognitiveservices account list --resource-group "your-rg" --query "[?kind=='AIServices'].[name,properties.endpoint]" -o table
+
+# Option 2: Azure AI Foundry Studio (Easier)
+# Go to https://ai.azure.com -> Your Project -> Settings -> Project details -> Copy endpoint
+
+# Note down the endpoint URL - you'll need this for AZURE_AI_PROJECT
+```
+
+### **Step 4: Configure Environment Variables**
+Create `.env` file in `agentic_ai/applications/`:
+
+> **🎯 Important: ALL environment variables are configured in the .env file below. No manual `$env:` or `export` commands needed!**
 
 ```bash
-# Step 1: Run agent evaluation against local backend
-cd agentic_ai/evaluations
-uv run python run_agent_eval.py --agent-name "your_agent_test" --backend-url "http://localhost:7002"
+cd agentic_ai/applications
+cat > .env << 'EOF'
+# Agent Configuration
+AGENT_MODULE=agents.agent_framework.multi_agent.handoff_multi_domain_agent
 
-# Step 2: Push results to Azure AI Foundry (optional)
-uv run python run_eval.py
+# Azure OpenAI Configuration (update with your values)
+AZURE_OPENAI_API_KEY=your_azure_openai_key_here
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-12-01-preview
+
+# MCP Server Configuration
+MCP_SERVER_URI=http://localhost:8000/mcp
+DISABLE_AUTH=true
+
+# Azure AI Foundry Project (REQUIRED for evaluation results)
+# Find this at: https://ai.azure.com -> Your Project -> Settings -> Project details
+# Format: https://<account>.services.ai.azure.com/api/projects/<project-name>
+AZURE_AI_PROJECT=https://your-account.services.ai.azure.com/api/projects/your-project-name
+
+# Azure Application Insights (REQUIRED for tracing)
+# Find this at: Azure Portal -> Application Insights -> Your Resource -> Overview -> Connection String
+APPLICATION_INSIGHTS_CONNECTION_STRING=InstrumentationKey=your-key;IngestionEndpoint=https://your-region.in.applicationinsights.azure.com/;LiveEndpoint=https://your-region.livediagnostics.monitor.azure.com/;ApplicationId=your-app-id
+
+# Azure Content Safety (Optional - uses same endpoint as OpenAI if available)
+AZURE_CONTENT_SAFETY_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
+AZURE_CONTENT_SAFETY_KEY=your_content_safety_key_here
+EOF
 ```
+
+**📝 To find your required URLs:**
+
+> **🚨 CRITICAL: You MUST replace all placeholder values below with your actual Azure resource details!**
+
+1. **AZURE_AI_PROJECT**: Go to [Azure AI Foundry Studio](https://ai.azure.com) → Your Project → **Settings** → **Project details** → Copy endpoint
+2. **APPLICATION_INSIGHTS_CONNECTION_STRING**: Go to [Azure Portal](https://portal.azure.com) → Application Insights → Your Resource → **Overview** → Copy Connection String
+3. **AZURE_OPENAI_**: Your existing Azure OpenAI resource credentials
+
+> **❌ Common Error: Leaving placeholder values like `your-account.services.ai.azure.com` will cause DNS resolution failures!**
+
+> **✅ Once the .env file is configured, all scripts automatically load these variables. No terminal commands needed!**
+
+## 📋 **Prerequisites Summary (Complete This Order):**
+
+### **Must Complete BEFORE Starting Services:**
+1. ✅ Azure CLI authenticated (`az login`)
+2. ✅ Azure AI Developer role assigned 
+3. ✅ **`.env` file created with YOUR ACTUAL resource URLs** (not placeholders)
+4. ✅ Python environment ready (`uv` installed)
+
+### **Service Startup Order (Do This Every Time):**
+1. 🟢 **First**: Start MCP server on port 8000
+2. 🟡 **Second**: Start backend on port 7000 (with telemetry auto-enabled)
+3. 🔵 **Third**: Run evaluations (they connect to backend)
+
+### **Step 5: Assign Azure Roles**
+
+You can assign roles in two ways:
+
+**Option 1: Azure Portal (Recommended)**
+1. Go to your Azure AI Project resource in Azure Portal
+2. Navigate to **Access Control (IAM)**
+3. Click **Add role assignment**
+4. Assign these roles to your user account:
+   - **Azure AI Developer** (required for evaluation runs)
+   - **Cognitive Services User** (required if using Azure OpenAI)
+
+**Option 2: Command Line**
+```bash
+# Get your user principal ID
+USER_ID=$(az ad signed-in-user show --query id -o tsv)
+
+# Get the AI project resource ID
+AI_PROJECT_ID=$(az cognitiveservices account show --name "your-ai-project-name" --resource-group "your-rg" --query id -o tsv)
+
+# Assign Azure AI Developer role
+az role assignment create \
+  --assignee $USER_ID \
+  --role "Azure AI Developer" \
+  --scope $AI_PROJECT_ID
+
+# Assign Cognitive Services User role (if using Azure OpenAI)
+az role assignment create \
+  --assignee $USER_ID \
+  --role "Cognitive Services User" \
+  --scope $AI_PROJECT_ID
+```
+
+### **Step 6: Start Required Services**
+
+> **⚠️ Important: Start services in this exact order!**
+
+```bash
+# Terminal 1: Start MCP server
+cd mcp
+uv run python mcp_service.py
+# Wait for: "MCP server running on http://localhost:8000"
+
+# Terminal 2: Start backend (AFTER MCP server is running)
+cd agentic_ai/applications
+uv run python -m uvicorn backend:app --port 7000 --reload
+# Wait for: "🎉 DEBUG: Telemetry setup complete!" and "Application startup complete"
+```
+
+**✅ Verify both services are running:**
+```bash
+# Test MCP server
+curl http://localhost:8000/health
+
+# Test backend
+curl http://localhost:7000/chat
+```
+
+### **Step 7: Run Evaluation Pipeline**
+
+> **🔧 No environment variable setup needed! All values loaded automatically from .env file.**
+
+```bash
+# Run evaluation against local backend
+cd agentic_ai/evaluations
+uv run python run_agent_eval.py --agent-name "teammate_test" --backend-url "http://localhost:7000"
+
+# Should see output like:
+# "Processing test case: example_1_billing"
+# "Overall Score: 0.XX, Passed: True/False"
+# "Generated evaluation_input_data.jsonl"
+```
+
+### **Step 11: Push Results to Foundry**
+
+> **🔧 AZURE_AI_PROJECT and all credentials loaded automatically from .env file.**
+
+```bash
+# Push evaluation results to Foundry
+uv run python run_eval.py
+
+# Should see output like:
+# "Created evaluation run: [run-id]"
+# "Results pushed to Foundry successfully"
+```
+
+### **Step 12: Verify Complete Integration**
+1. **Evaluation Results**: Check that `evaluation_input_data.jsonl` was generated
+2. **Foundry Evaluation**: Go to [https://ai.azure.com](https://ai.azure.com) → **Evaluation** section → Look for your run
+3. **Foundry Tracing**: Navigate to **Tracing** section → Verify agent traces appear  
+4. **Metrics Dashboard**: Check evaluation metrics (Tool Behavior, Completeness, etc.)
+
+## 📋 **Verification Checklist**
+
+### **Core Evaluation (Required):**
+- [ ] Azure CLI authenticated
+- [ ] Azure AI Developer role assigned
+- [ ] `.env` file configured with AZURE_AI_PROJECT
+- [ ] MCP server running on port 8000
+- [ ] Backend running on port 7000
+- [ ] Evaluation runs successfully (80%+ score expected)
+- [ ] `evaluation_input_data.jsonl` generated
+- [ ] Results appear in Foundry evaluation portal
+
+### **Optional Tracing (If Enabled):**
+- [ ] Application Insights resource created
+- [ ] `APPLICATION_INSIGHTS_CONNECTION_STRING` in `.env` 
+- [ ] Backend shows "Telemetry setup complete!" message
+- [ ] Tracing data visible in Foundry tracing portal
 
 ## File Overview
 
@@ -40,6 +235,7 @@ uv run python run_eval.py
 | `evaluator.py` | Core evaluation framework and result aggregation |
 | `eval_dataset.json` | Test cases based on Contoso customer scenarios |
 | `evaluation_input_data.jsonl` | Generated data file for Foundry integration |
+| `telemetry.py` | **Optional**: Azure Monitor configuration for tracing |
 
 ## Evaluation Metrics Explained
 
@@ -100,52 +296,37 @@ Each test case includes:
 
 ## Azure AI Foundry Integration
 
-### Evaluation Results
-After running evaluations, push results to Foundry for tracking and comparison:
+The evaluation system automatically integrates with Azure AI Foundry when properly configured (see Step-by-Step Setup Guide above). This provides:
 
-```bash
-# Requires AZURE_AI_PROJECT environment variable
-export AZURE_AI_PROJECT="your_foundry_project_endpoint"
-uv run python run_eval.py
-```
+- **Evaluation Tracking**: All evaluation runs are stored and compared over time
+- **Real-time Tracing**: Agent operations and tool calls are captured automatically 
+- **Performance Monitoring**: Token usage, duration, and error tracking
+- **Collaborative Review**: Team can access results via Foundry portal
 
-This creates a new evaluation run in Foundry with:
-- Individual test case scores
-- Aggregated metrics across all test cases  
-- Comparison with previous evaluation runs
+## What Changes Were Made for Integration
 
-### Telemetry & Tracing (In Development)
-⚠️ **Note**: Tracing integration is currently being developed. The current setup includes:
+### Backend Changes:
+1. **Created `telemetry.py`** - Azure Monitor + Agent Framework observability setup (located in `agentic_ai/evaluations/`)
+2. **Modified `backend.py`** - Added `from evaluations.telemetry import setup_telemetry` and setup call
+3. **Updated `pyproject.toml`** - Added telemetry dependencies
 
-1. **Backend Telemetry Setup**: 
-   - Added `telemetry.py` with Azure Monitor configuration
-   - Calls `configure_azure_monitor()` + `setup_observability()` in backend
-   - Requires `APPLICATION_INSIGHTS_CONNECTION_STRING` in `.env`
-   - Agent Framework handles automatic span emission for agent operations
+### Evaluation System Changes:
+4. **Modified `run_agent_eval.py`** - HTTP-based evaluation approach with correct port 7000
+5. **Enhanced `metrics.py`** - Production-ready evaluation metrics
+6. **Updated `run_eval.py`** - Foundry integration for result submission
 
-2. **What's Working**: 
-   - Evaluation results push to Foundry ✅
-   - Backend telemetry infrastructure setup ✅
-   - Agent Framework configured to emit traces ✅
+### Agent Changes:
+- **No agent code changes required** - Agent Framework handles tracing automatically
 
-3. **What Needs Verification**:
-   - Agent Framework spans appearing in Foundry Tracing UI
-   - Complete trace correlation between local agent and Foundry
-   - Full integration testing with hosted agents
+### What Gets Traced Automatically:
+- **Agent Operations**: Single agent, multi-domain, collaborative patterns
+- **Tool Calls**: MCP tool invocations and responses  
+- **Request/Response**: HTTP requests and agent responses
+- **Performance**: Duration, token usage, error rates
+- **Handoffs**: Multi-agent coordination and specialist routing
+- **Errors & Exceptions**: Failed requests and debugging information
 
-**Note**: The Agent Framework itself handles the tracing instrumentation - no additional agent code changes needed.
-
-## Working with Local Agents
-
-The evaluation system works by sending HTTP requests to your running backend:
-
-1. **Agent Configuration**: Specify agent in `.env` with `AGENT_MODULE=agents.agent_framework.multi_agent.handoff_multi_domain_agent`
-
-2. **HTTP Testing**: `run_agent_eval.py` sends POST requests to `/chat` endpoint
-
-3. **Tool Tracking**: Agent Framework automatically broadcasts tool calls for evaluation
-
-4. **Result Generation**: Creates `evaluation_input_data.jsonl` for Foundry integration
+All tracing happens at the infrastructure level - existing agent implementations get comprehensive observability without any code modifications!
 
 ## Extending the Framework
 
@@ -166,36 +347,79 @@ The evaluation system works by sending HTTP requests to your running backend:
 
 ## Troubleshooting
 
-### Common Issues
-
-**"Cannot connect to backend"**
-- Ensure backend is running on specified port
-- Check `.env` configuration
-- Verify agent module loads correctly
-
-**"MCP connection failed"**  
-- Start MCP server: `cd mcp && uv run python mcp_service.py`
-- Check MCP_SERVER_URI in `.env`
-- Verify port 8000 is available
-
-**"No evaluation results"**
-- Check agent returns valid responses
-- Verify tool calls are captured
-- Review agent logs for errors
-
-**"Foundry push failed"**
-- Set AZURE_AI_PROJECT environment variable
-- Verify Azure credentials are configured
-- Check evaluation_input_data.jsonl was generated
-
-### Debug Mode
-
-Run with verbose output to see detailed evaluation steps:
-
+### **"Failed to resolve hostname" / DNS Error**
 ```bash
-# See tool calls and scoring details
-python run_agent_eval.py --agent-name "debug_run" --backend-url "http://localhost:7002"
+# Error: getaddrinfo failed for 'your-account.services.ai.azure.com'
+# Solution: Update .env file with actual Azure AI project endpoint
+cd agentic_ai/applications
+grep "AZURE_AI_PROJECT" .env
+# Should show your real endpoint, not placeholder values
 ```
+
+### **Backend Won't Start**
+```bash
+# Use correct uvicorn command:
+cd agentic_ai/applications
+uv run python -m uvicorn backend:app --port 7000 --reload
+
+# Look for these success messages:
+# ✅ "🎉 DEBUG: Telemetry setup complete!"
+# ✅ "INFO: Application startup complete"
+```
+
+### **"Authentication failed"**
+```bash
+# Verify Azure login
+az account show
+
+# Check role assignments
+az role assignment list --assignee $(az ad signed-in-user show --query id -o tsv)
+```
+
+### **"Cannot connect to backend"**
+```bash
+# Check if backend is running
+curl http://localhost:7000/health
+
+# Check MCP server
+curl http://localhost:8000/health
+```
+
+### **"Foundry evaluation push failed"**
+```bash
+# Verify AZURE_AI_PROJECT is set correctly
+echo $AZURE_AI_PROJECT
+
+# Check if evaluation_input_data.jsonl was generated
+ls -la evaluation_input_data.jsonl
+```
+
+### **"No evaluation results"**
+```bash
+# Check agent returns valid responses
+curl -X POST http://localhost:7000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "test query"}'
+```
+
+### **Tracing Issues (If Enabled):**
+
+### **"Telemetry setup failed"**
+```bash
+# All values loaded from .env file automatically - no manual setting needed
+# To verify your .env file has the connection string:
+cd agentic_ai/applications
+grep "APPLICATION_INSIGHTS_CONNECTION_STRING" .env
+
+# Test telemetry directly
+cd ../evaluations
+python -c "from telemetry import setup_telemetry; setup_telemetry()"
+```
+
+### **"No traces in Foundry"**
+- Wait 1-2 minutes for ingestion delay
+- Verify backend shows "Telemetry setup complete!" message
+- Check that agent interactions are happening via backend
 
 ## Results and Reporting
 
