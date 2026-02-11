@@ -474,7 +474,7 @@ pandas==2.3.3
     # via
     #   azure-ai-evaluation
     #   streamlit
-pillow==11.3.0
+pillow==12.1.1
     # via streamlit
 ply==3.11
     # via jsonpath-ng
