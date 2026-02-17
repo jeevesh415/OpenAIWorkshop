@@ -52,7 +52,7 @@ from durabletask.azuremanaged.worker import DurableTaskSchedulerWorker
 from durabletask.task import ActivityContext, OrchestrationContext, Task, when_any, when_all
 from pydantic import BaseModel, ValidationError
 
-from agent_framework import MCPStreamableHTTPTool, WorkflowOutputEvent
+from agent_framework import MCPStreamableHTTPTool, WorkflowEvent
 from agent_framework.azure import AzureOpenAIChatClient
 
 from fraud_analysis_workflow import (
@@ -110,6 +110,7 @@ class ActionResult(BaseModel):
 
 _mcp_tool: MCPStreamableHTTPTool | None = None
 _chat_client: AzureOpenAIChatClient | None = None
+_main_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def _ensure_resources():
@@ -170,8 +171,8 @@ def run_fraud_analysis(context: ActivityContext, alert_dict: dict) -> dict:
         # Run workflow and collect output
         assessment: FraudRiskAssessment | None = None
         
-        async for event in workflow.run_stream(alert):
-            if isinstance(event, WorkflowOutputEvent):
+        async for event in workflow.run(alert, stream=True):
+            if isinstance(event, WorkflowEvent) and event.type == "output":
                 if isinstance(event.data, FraudRiskAssessment):
                     assessment = event.data
                     break
@@ -185,8 +186,15 @@ def run_fraud_analysis(context: ActivityContext, alert_dict: dict) -> dict:
         
         return assessment_dict
     
-    # Run the async workflow synchronously
-    result = asyncio.run(_run_workflow())
+    # Run the async workflow on the main event loop (where MCP tool was initialized)
+    if _main_loop is None or _main_loop.is_closed():
+        raise RuntimeError("Main event loop not available. Was the worker started correctly?")
+    try:
+        future = asyncio.run_coroutine_threadsafe(_run_workflow(), _main_loop)
+        result = future.result(timeout=300)  # 5 minute timeout
+    except Exception as e:
+        logger.error(f"[Activity] run_fraud_analysis FAILED: {type(e).__name__}: {e}", exc_info=True)
+        raise
     logger.info(f"[Activity] run_fraud_analysis completed, risk_score={result.get('overall_risk_score')}")
     return result
 
@@ -577,6 +585,9 @@ def setup_worker(worker: DurableTaskSchedulerWorker) -> None:
 
 async def main():
     """Main entry point for the worker process."""
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+    
     logger.info("="*60)
     logger.info("Starting Durable Fraud Detection Worker")
     logger.info("="*60)

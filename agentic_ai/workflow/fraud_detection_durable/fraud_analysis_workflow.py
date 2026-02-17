@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from agent_framework import (
-    ChatAgent,
+    Agent,
     Executor,
     handler,
     WorkflowBuilder,
@@ -197,14 +197,14 @@ class UsagePatternExecutor(Executor):
         allowed_tools = ["get_customer_detail", "get_subscription_detail", "get_data_usage", "search_knowledge_base"]
         filtered_functions = [func for func in mcp_tool.functions if func.name in allowed_tools]
         
-        self._agent = ChatAgent(
-            chat_client=chat_client,
-            name="UsagePatternAnalyst",
+        self._agent = Agent(
+            client=chat_client,
             instructions=(
                 "You are a specialist in analyzing customer data usage patterns. "
                 "Look for anomalies like sudden spikes, unusual hours, or patterns inconsistent with history. "
                 "Use the available tools to gather data and provide a risk score (0.0-1.0) and findings."
             ),
+            name="UsagePatternAnalyst",
             tools=filtered_functions,
         )
 
@@ -270,14 +270,14 @@ class LocationAnalysisExecutor(Executor):
         allowed_tools = ["get_customer_detail", "get_security_logs", "search_knowledge_base"]
         filtered_functions = [func for func in mcp_tool.functions if func.name in allowed_tools]
         
-        self._agent = ChatAgent(
-            chat_client=chat_client,
-            name="LocationAnalysisAgent",
+        self._agent = Agent(
+            client=chat_client,
             instructions=(
                 "You are a specialist in analyzing geolocation and security patterns. "
                 "Look for impossible travel, VPN usage, or login anomalies. "
                 "Use the available tools to gather data and provide a risk score (0.0-1.0) and findings."
             ),
+            name="LocationAnalysisAgent",
             tools=filtered_functions,
         )
 
@@ -343,14 +343,14 @@ class BillingChargeExecutor(Executor):
                          "get_customer_orders", "search_knowledge_base"]
         filtered_functions = [func for func in mcp_tool.functions if func.name in allowed_tools]
         
-        self._agent = ChatAgent(
-            chat_client=chat_client,
-            name="BillingChargeAnalyst",
+        self._agent = Agent(
+            client=chat_client,
             instructions=(
                 "You are a specialist in analyzing billing and charge patterns. "
                 "Look for unusual purchases, subscription changes, or payment anomalies. "
                 "Use the available tools to gather data and provide a risk score (0.0-1.0) and findings."
             ),
+            name="BillingChargeAnalyst",
             tools=filtered_functions,
         )
 
@@ -446,14 +446,14 @@ class FraudRiskAggregatorExecutor(Executor):
         logger.info(f"[Aggregator] Aggregating results for {alert_id}")
         
         # Use LLM to synthesize findings
-        agent = ChatAgent(
-            chat_client=self._chat_client,
-            name="FraudRiskAggregator",
+        agent = Agent(
+            client=self._chat_client,
             instructions=(
                 "You are a senior fraud analyst synthesizing findings from specialist agents. "
                 "Weigh the evidence, calculate an overall risk score, and recommend an action. "
                 "Be thorough but decisive. Return a JSON response with the assessment."
             ),
+            name="FraudRiskAggregator",
         )
         
         prompt = f"""
@@ -583,10 +583,7 @@ def create_fraud_analysis_workflow(
     aggregator = FraudRiskAggregatorExecutor(chat_client)
     
     # Build workflow topology
-    builder = WorkflowBuilder()
-    
-    # Set entry point
-    builder.set_start_executor(alert_router)
+    builder = WorkflowBuilder(start_executor=alert_router)
     
     # Fan-out: Alert Router → 3 Specialists
     builder.add_edge(alert_router, usage_executor)
@@ -648,9 +645,9 @@ async def main():
         print(f"{'='*60}\n")
         
         # Run workflow
-        async for event in workflow.run_stream(alert):
+        async for event in workflow.run(alert, stream=True):
             print(f"Event: {type(event).__name__}")
-            if hasattr(event, 'data') and isinstance(event.data, FraudRiskAssessment):
+            if event.type == "output" and isinstance(event.data, FraudRiskAssessment):
                 assessment = event.data
                 print(f"\n{'='*60}")
                 print("FRAUD RISK ASSESSMENT")
