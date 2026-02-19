@@ -262,7 +262,7 @@ manager = ConnectionManager()
 
 event_producer = EventProducer(
     interval_seconds=float(os.getenv("EVENT_INTERVAL_SECONDS", "3.0")),
-    anomaly_probability=float(os.getenv("ANOMALY_PROBABILITY", "0.01")),
+    anomaly_probability=float(os.getenv("ANOMALY_PROBABILITY", "0.08")),
 )
 _event_producer_task: asyncio.Task | None = None
 
