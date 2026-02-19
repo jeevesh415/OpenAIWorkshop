@@ -1,28 +1,191 @@
-# Ambient Fraud Detection — Durable Agentic Workflow
+# Durable Agentic Workflows — A Design Pattern for Long-Running AI Agent Orchestration
 
-A production-grade reference architecture for **ambient, long-running, durable, fail-over capable AI agent workflows** with human-in-the-loop (HITL) decision gates.
+## The Problem: AI Agents That Must Not Forget
 
-This demo implements the complete lifecycle of a background (ambient) agent system: continuous telemetry monitoring → anomaly detection → multi-agent investigation → human approval → action execution — all with crash recovery, persistent state, and real-time UI visualization.
+Most AI agent demos run in a single request-response cycle: user asks, agent thinks, agent answers. But real-world agent systems need to do things that take **minutes, hours, or days** — and they must survive failures along the way.
 
-> 📐 **Taking this to production?** See [PRODUCTION_ARCHITECTURE.md](PRODUCTION_ARCHITECTURE.md) for the Azure Container Apps deployment topology, security model, and scaling characteristics.
+Consider what happens when an AI agent needs to:
+
+- **Monitor transactions 24/7 for fraud** — continuously ingest telemetry events, detect anomalies in real time, autonomously launch multi-agent investigations, then wait for a human analyst to approve or reject the recommended action (which might take hours or happen over a weekend). This is an *ambient agent* — it runs in the background with no user prompt, watching for patterns that require intervention
+- **Manage an IT incident** — detect anomaly, triage severity, page on-call engineer, wait for acknowledgment (with escalation if no response in 15 minutes), coordinate remediation steps, produce post-mortem
+- **Process a loan application** — pull credit reports, verify employment, run compliance checks in parallel, wait for underwriter approval, then execute the disbursement
+- **Orchestrate a supply chain order** — validate inventory across warehouses, reserve stock, calculate shipping, wait for supplier confirmation, handle partial fulfillments, retry failed shipments
+
+These scenarios share a common trait: **no human initiates the work**. Events arrive continuously — transactions, alerts, sensor readings, log entries — and the agent must watch, decide, act, and sometimes wait for human input before proceeding. This is fundamentally different from chatbot-style "user asks, agent answers" interactions.
+
+These are **long-running, multi-step, stateful workflows** where:
+
+1. **Human decisions inject unbounded delays** — an analyst might respond in 5 minutes or 5 days
+2. **Multiple agents collaborate** — a router dispatches to specialists, an aggregator synthesizes results
+3. **Failures are inevitable** — processes crash, containers restart, VMs get preempted, network connections drop
+4. **Actions must not be repeated** — you can't lock a bank account twice or charge a customer twice because the worker restarted
+
+The fundamental question is: **when the process running your agent dies, what happens to all the work it already completed?**
 
 ---
 
-## 🎯 Workshop Learning Objectives
+## Why Building This Yourself Is Harder Than You Think
 
-After this workshop you will understand how to:
+The instinct is to reach for familiar tools: "I'll just checkpoint my state to a database or blob storage." This works for simple linear flows, but falls apart in real agent orchestration scenarios. Here are the five problems you'll need to solve — and each one is a distributed systems project in its own right.
 
-1. **Design a 3-layer ambient agent architecture** (Detection → Investigation → Decision)
-2. **Choose the right durability boundary** — what needs DTS checkpointing vs. what doesn't
-3. **Implement human-in-the-loop** with durable external events that survive process restarts
-4. **Build stateful feedback loops** — analyst rejects → agent re-investigates with full context
-5. **Integrate MCP tools** for real-time data access within agent workflows
-6. **Add observability** with OpenTelemetry + Application Insights
-7. **Explain _why_ this architecture is truly durable** — not just buzzwords, but the concrete mechanics
+### 1. The Wait-for-Human Problem
+
+Your orchestration reaches a point where it needs a human decision. The agent has produced a risk assessment; now an analyst must approve or reject.
+
+**DIY approach:** Save current state to blob → poll a database for the decision → resume.
+
+**What goes wrong:**
+- You need an event subscription system: when the analyst submits a decision via your API, something must correlate that decision back to the specific waiting orchestration instance
+- You need a timeout mechanism: if no decision arrives in 72 hours, escalate automatically
+- You need both to race: whichever fires first (human decision or timeout) wins, and the other must be cancelled cleanly
+- All of this must survive process restarts — the timer can't live in `asyncio`; the event subscription can't live in a Python dict
+
+With a durable orchestrator, this is one line:
+
+```python
+winner = yield when_any([
+    context.wait_for_external_event("AnalystDecision"),
+    context.create_timer(timedelta(hours=72))
+])
+```
+
+The event subscription, the timer, and the race — all persisted in the orchestrator's storage, not in worker memory.
+
+### 2. The Replay/Resume Problem
+
+Your workflow has 8 steps. It crashed after step 5. How do you resume at step 6?
+
+**DIY approach:** Save a `current_step` counter → on restart, load it → use a giant if/elif chain to jump to the right step.
+
+**What goes wrong:**
+- Each step's *output* was consumed by later steps. You need to save every intermediate result, not just the step number
+- If your workflow has branches (`if risk > 0.6: wait for human; else: auto-clear`), the if/elif chain grows exponentially
+- If your workflow has loops (analyst rejects → re-investigate → wait again), the state machine becomes nearly impossible to maintain
+- Every time you change the workflow logic, you must update the resume logic in lockstep
+
+With a durable orchestrator, there is no resume logic. The framework **replays your function from the beginning**, returning cached results for completed steps and suspending at the first incomplete step. Your code is the state machine.
+
+### 3. The Concurrency Problem
+
+Multiple worker instances are running (for scale). Two workers pick up the same orchestration after a restart.
+
+**DIY approach:** Distributed locks via Redis or blob leases → acquire before processing → release after.
+
+**What goes wrong:**
+- Lock expiration vs. long-running work: if the LLM call takes 30 seconds and your lock expires at 15, another worker enters
+- Deadlocks when one worker holds lock A and waits for lock B while another holds lock B and waits for lock A
+- Partial completion: worker acquires lock, completes 3 of 5 steps, crashes — now you have half-done state and need rollback
+
+A durable orchestrator manages concurrency internally via its event store — each orchestration instance has an atomic event stream with built-in sequencing.
+
+### 4. The Exactly-Once Side Effects Problem
+
+Step 5 is "lock the customer's bank account." The worker executed it, but crashed before recording that it succeeded.
+
+**DIY approach:** Idempotency keys for every side effect → check before executing → mark after.
+
+**What goes wrong:**
+- You need an idempotency store separate from your state store (they must be updated atomically or you get inconsistencies)
+- Every activity function must be wrapped with idempotency-key generation, lookup, and recording
+- The pattern is different for every external system (REST API idempotency key vs. database upsert vs. message dedup)
+
+A durable orchestrator treats activities as **events in an append-only log**. If the worker crashes after the activity completes but before it records the result, the replay will see the completion event and skip re-execution automatically.
+
+### 5. The Stateful Agent Conversation Problem
+
+Your agent needs to re-investigate with full context: the original alert, its first analysis, the analyst's feedback. This conversation must persist across process restarts and even across multiple reject-reinvestigate cycles.
+
+**DIY approach:** Serialize the chat history to blob/database → load on each call → append → save.
+
+**What goes wrong:**
+- Concurrent writes: two activities might try to update the same conversation simultaneously
+- You need optimistic concurrency (ETags) or pessimistic locking
+- Schema evolution: as your agent's message format changes, old serialized conversations must still deserialize
+- Garbage collection: conversations that are complete should eventually be pruned
+
+A durable orchestrator with **entity state** (like DTS entities) handles all of this: atomic reads/writes, built-in concurrency control, and structured state that the framework manages.
 
 ---
 
-## 🏗️ Architecture: The 3-Layer Pattern
+### The Honest Assessment
+
+| Concern | DIY Blob/DB Checkpointing | Durable Orchestrator (DTS) |
+|---------|---------------------------|---------------------------|
+| Simple linear pipeline, no human wait | ✅ Works fine, less infra | ⚠️ Overkill |
+| Human-in-the-loop with timeout | 🔴 Build entire event system | ✅ `when_any([event, timer])` |
+| Crash recovery with branches/loops | 🔴 Exponential state machine | ✅ Automatic replay |
+| Multi-worker concurrency | 🔴 Distributed locks | ✅ Built-in event sequencing |
+| Exactly-once side effects | 🔴 Idempotency infrastructure | ✅ Activity completion log |
+| Persistent agent conversations | 🟡 Possible but manual | ✅ Entity state with concurrency |
+
+**Bottom line:** If your agent workflow is a straight-line script with no human waits, DIY checkpointing works. The moment you add human-in-the-loop, branching, loops, or multi-step crash recovery, you're building a workflow engine — and building a *correct* one is a multi-year distributed systems project.
+
+---
+
+## Enter: Azure Durable Task Scheduler (DTS)
+
+The [Azure Durable Task Scheduler](https://learn.microsoft.com/en-us/azure/durable-task-scheduler/) is a managed service that provides exactly the primitives needed for durable agent orchestration:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff' }}}%%
+flowchart LR
+    subgraph DTS_SCOPE["🔷 What DTS Provides"]
+        direction TB
+        DS1["📋 Persistent task queue"]
+        DS2["📝 Event store — append-only log"]
+        DS3["⏱️ Timer service — survives restarts"]
+        DS4["🗃️ Entity state storage"]
+        DS5["📦 Work item distribution"]
+        DS6["🔁 At-least-once delivery"]
+    end
+
+    subgraph WORKER_SCOPE["🔧 What Your Code Provides"]
+        direction TB
+        WS1["🐍 Compute runtime — Python"]
+        WS2["🤖 LLM calls — Azure OpenAI"]
+        WS3["🔌 Tool calls — MCP, APIs"]
+        WS4["📊 Business logic — orchestration"]
+        WS5["🧩 Agent framework integration"]
+    end
+
+    DTS_SCOPE ~~~ WORKER_SCOPE
+
+    style DTS_SCOPE fill:#cce5ff,stroke:#004085,stroke-width:2px
+    style WORKER_SCOPE fill:#ffeeba,stroke:#ffc107,stroke-width:2px
+```
+
+**DTS is a persistent task queue + event store + timer service.** It doesn't run your code — it stores the *record of what happened* and *dispatches work items* to workers. Your worker is a **stateless compute runtime** that pulls tasks, executes your Python/LLM/MCP logic, and reports results back. If the worker dies, DTS still has the full event log; a new worker replays it and picks up where things left off.
+
+### Key Properties
+
+| Property | How It Works |
+|----------|-------------|
+| **Checkpointing** | Every `yield` in your orchestration writes a completion event to DTS's append-only log |
+| **Crash recovery** | Worker replays the orchestration function; completed yields return cached results instantly |
+| **Human-in-the-loop** | `wait_for_external_event()` creates a subscription in DTS storage — survives indefinitely |
+| **Timers** | `create_timer(72h)` fires in DTS's timer service — not in your process memory |
+| **Entity state** | Agent conversation history persisted as a structured entity, with atomic updates |
+| **Scaling** | Multiple workers pull from the same task hub — DTS distributes work items |
+
+### Development Experience
+
+DTS ships a **local emulator** as a Docker container, so you develop and test locally without an Azure subscription:
+
+```bash
+# Local development — zero cloud dependency
+docker run -d --name dts-emulator -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
+
+# Production — same SDK, same code, just change the endpoint
+DTS_ENDPOINT=https://your-dts.northcentralus.durabletask.io
+```
+
+---
+
+## Reference Architecture: Ambient Fraud Detection
+
+To prove these patterns, we built a complete fraud detection system that exercises every durable orchestration primitive: fan-out/fan-in agents, human-in-the-loop with timeout, stateful feedback loops, and crash recovery.
+
+### The 3-Layer Design
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'lineColor': '#5C6B77' }}}%%
@@ -110,17 +273,43 @@ flowchart TB
 
 ### Why This Layering?
 
-| Layer | Uses LLM? | Durable? | Why? |
-|-------|-----------|----------|------|
+| Layer | Uses LLM? | Durable? | Rationale |
+|-------|-----------|----------|-----------|
 | **Layer 1** — Detection | ❌ No | ❌ No | Events arrive every 2–5s. An LLM call takes 2–5s and costs money. Simple rules catch 95% of benign events at zero cost. |
 | **Layer 2** — Investigation | ✅ Yes | ✅ Yes (entity) | Complex multi-signal reasoning is the LLM's strength. Entity state persists the full conversation for re-investigation. |
 | **Layer 3** — Decision | ❌ No | ✅ Yes (orchestration) | Human decisions can take hours/days. DTS timers and external events survive crashes and restarts. |
 
+### Service Topology
+
+The system runs as four independent processes communicating through DTS and HTTP:
+
+```mermaid
+flowchart LR
+    BROWSER["🌐 Browser<br/>(REST / SSE / WS)"]
+    BACKEND["⚙️ Backend<br/>(FastAPI)"]
+    DTS["🔷 DTS<br/>(gRPC SDK)"]
+    WORKER["🔧 Worker"]
+    MCP["🔌 MCP Server"]
+
+    BROWSER -->|"HTTP"| BACKEND
+    BACKEND -->|"gRPC"| DTS
+    DTS -.->|"pull"| WORKER
+    WORKER -->|"HTTP"| MCP
+
+    style BROWSER fill:#e8f4fd,stroke:#4A90D9
+    style BACKEND fill:#d4edda,stroke:#28a745
+    style DTS fill:#cce5ff,stroke:#004085
+    style WORKER fill:#ffeeba,stroke:#ffc107
+    style MCP fill:#d6d8db,stroke:#6c757d
+```
+
+The browser cannot call DTS's gRPC SDK directly. The FastAPI backend acts as a Backend-For-Frontend (BFF), translating REST/WebSocket/SSE into SDK calls. In production, swap `DTS_ENDPOINT` from `localhost:8080` to your Azure DTS endpoint — **zero code changes**.
+
 ---
 
-## 🔑 Key Patterns
+## Key Design Patterns
 
-### Pattern 1: Durability Boundaries — What Gets Checkpointed?
+### Pattern 1: Durability Boundaries — What Gets Checkpointed
 
 Not everything needs to be durable. The key architectural insight is choosing **where** to draw the durability boundary:
 
@@ -148,7 +337,7 @@ flowchart LR
     style FAST fill:#fff3cd,stroke:#856404,stroke-width:2px
 ```
 
-**Why not checkpoint every LLM call?** Adding DTS checkpoints to each LLM call would add ~200ms overhead per call and massively complicate the agent topology. The inner workflow runs in ~10–20s — fast enough that retry-on-failure is the right strategy. If the worker crashes mid-inner-workflow, the entity call simply retries from the beginning.
+**Why not checkpoint every LLM call?** Adding DTS checkpoints to each LLM call would add ~200ms overhead per call and massively complicate the agent topology. The inner workflow runs in ~10–20 seconds — fast enough that retry-on-failure is the right strategy. If the worker crashes mid-inner-workflow, the entity call simply retries from the beginning.
 
 ### Pattern 2: Stateful Feedback Loop via Durable Entity
 
@@ -182,7 +371,7 @@ sequenceDiagram
     E-->>O: AgentResponse (risk=0.72)
 ```
 
-The agent doesn't start from scratch — it sees the original alert, its first analysis, AND the analyst's feedback. This is what makes re-investigation meaningful.
+The agent doesn't start from scratch — it sees the original alert, its first analysis, AND the analyst's feedback. This is what makes re-investigation meaningful rather than redundant.
 
 ### Pattern 3: Ambient Detection Without LLM Overhead
 
@@ -201,34 +390,11 @@ if event.type == "transaction" and event.amount > 3 * customer_average:
 
 At 1 event every 2–5 seconds, an LLM call (2–5s each) can't keep up. Rules handle the 95% of benign events at zero cost. The LLM's value is in Layer 2, where it reasons about complex multi-signal patterns.
 
-### Pattern 4: Backend-For-Frontend (BFF) for Durable Workflows
-
-The browser cannot call DTS's gRPC SDK directly. The FastAPI backend translates REST/WebSocket into SDK calls:
-
-```mermaid
-flowchart LR
-    BROWSER["🌐 Browser<br/>(REST / SSE / WS)"]
-    BACKEND["⚙️ Backend<br/>(FastAPI)"]
-    DTS["🔷 DTS<br/>(gRPC SDK)"]
-    WORKER["🔧 Worker"]
-
-    BROWSER -->|"HTTP"| BACKEND
-    BACKEND -->|"gRPC"| DTS
-    DTS -.->|"pull"| WORKER
-
-    style BROWSER fill:#e8f4fd,stroke:#4A90D9
-    style BACKEND fill:#d4edda,stroke:#28a745
-    style DTS fill:#cce5ff,stroke:#004085
-    style WORKER fill:#ffeeba,stroke:#ffc107
-```
-
-In production, swap `DTS_ENDPOINT` from `localhost:8080` to your Azure DTS endpoint. **Zero code changes.** See [PRODUCTION_ARCHITECTURE.md](PRODUCTION_ARCHITECTURE.md).
-
 ---
 
-## 🛡️ Why Is This Actually Durable? — Deep Dive
+## Durability Mechanics — Deep Dive
 
-This section explains the **concrete mechanics** that make this architecture truly durable, not just the claim. Understanding these internals is critical for the workshop.
+This section explains the **concrete mechanics** that make the architecture truly durable — not just the claim, but how it actually works under the hood.
 
 ### The Durability Stack
 
@@ -276,7 +442,7 @@ These aren't in-memory variables — they're **persisted facts** in DTS storage.
 
 ### 2. Replay, Not Restore — How Crash Recovery Works
 
-When a worker restarts after a crash, it doesn't "load state" — it **replays the orchestration function from the beginning**, but with a twist:
+When a worker restarts after a crash, it doesn't "load state" — it **replays the orchestration function from the beginning**, but with a critical twist:
 
 ```mermaid
 flowchart TB
@@ -295,7 +461,7 @@ The generator function re-executes, but each `yield` that already completed **re
 
 ### 3. External Events Survive Process Death
 
-The `wait_for_external_event("AnalystDecision")` call is especially powerful:
+The `wait_for_external_event("AnalystDecision")` call is especially powerful — it creates a subscription that lives entirely in DTS storage:
 
 ```mermaid
 sequenceDiagram
@@ -340,7 +506,7 @@ When the worker crashes, the only things lost are in-flight LLM/MCP calls — an
 
 ### 5. Entity State Persistence (`DurableAgentState`)
 
-The `agent-framework` library stores the full agent conversation in a structured schema:
+The agent-framework library stores the full agent conversation in a structured schema:
 
 ```mermaid
 %%{init: {'theme': 'base'}}%%
@@ -365,79 +531,21 @@ erDiagram
     STATE ||--o{ ENTRY : "conversationHistory"
 ```
 
-Every time the entity processes a request, the cycle is:
+Every time the entity processes a request:
 1. **Load** state from DTS → `DurableAgentState`
-2. **Append** user message (alert or feedback)
-3. **Rebuild** full chat history from all entries (filtering out errors)
+2. **Append** user message (alert or analyst feedback)
+3. **Rebuild** full chat history from all entries
 4. **Call** LLM with complete conversation
 5. **Append** assistant response
 6. **Persist** state back to DTS via `self.persist_state()`
 
 This is why the agent can re-investigate with full context — the conversation history is a **durable, append-only log** stored in DTS, not in worker memory.
 
-### 6. What DTS Provides vs. What It Doesn't
-
-Understanding the **scope boundary** is critical:
-
-```mermaid
-%%{init: {'theme': 'base'}}%%
-flowchart LR
-    subgraph DTS_SCOPE["🔷 DTS Provides"]
-        direction TB
-        DS1["Persistent task queue"]
-        DS2["Event store · append-only log"]
-        DS3["Timer service"]
-        DS4["Entity state storage"]
-        DS5["Work item distribution"]
-        DS6["At-least-once delivery"]
-    end
-
-    subgraph WORKER_SCOPE["🔧 Worker Provides"]
-        direction TB
-        WS1["Compute runtime · Python"]
-        WS2["LLM calls · Azure OpenAI"]
-        WS3["MCP tool calls · HTTP"]
-        WS4["Business logic · orchestration"]
-        WS5["Agent framework integration"]
-    end
-
-    DTS_SCOPE ~~~ WORKER_SCOPE
-
-    style DTS_SCOPE fill:#cce5ff,stroke:#004085,stroke-width:2px
-    style WORKER_SCOPE fill:#ffeeba,stroke:#ffc107,stroke-width:2px
-```
-
-DTS is a **persistent task queue + event store + timer service**. It doesn't run your code — it stores the _record of what happened_ and _dispatches work items_ to workers. The worker is a **stateless compute runtime** that pulls tasks, executes your Python/LLM/MCP logic, and reports results back. If the worker dies, DTS still has the full event log; a new worker replays it and picks up where things left off.
-
 ---
 
-## 📁 Project Structure
+## Running the Demo
 
-```
-fraud_detection_durable/
-├── worker.py                       # DTS Worker: orchestration + agent entity + activities
-├── backend.py                      # FastAPI BFF: REST API, WebSocket, SSE, event producer
-├── event_producer.py               # Layer 1: telemetry generation + anomaly detection
-├── fraud_analysis_workflow.py      # Inner workflow: fan-out → aggregate (Layer 2)
-├── provision_dts.ps1               # Azure DTS provisioning script
-├── .env                            # Configuration (Azure OpenAI, DTS, App Insights)
-├── pyproject.toml                  # Dependencies
-├── README.md                       # This file
-├── PRODUCTION_ARCHITECTURE.md      # Production deployment on Azure Container Apps
-└── ui/                             # React/Vite UI
-    ├── src/
-    │   ├── App.jsx                 # Main app: WebSocket + SSE connections
-    │   └── components/
-    │       ├── ControlPanel.jsx    # Alert selector + start button
-    │       ├── WorkflowVisualizer.jsx  # React Flow DAG visualization
-    │       ├── AnalystDecisionPanel.jsx  # HITL approve/reject/feedback
-    │       └── EventFeed.jsx       # Live telemetry feed (Layer 1)
-    └── package.json
-```
-
----
-
-## 🚀 Quick Start
+This section covers how to run the reference implementation locally to see the patterns in action.
 
 ### Prerequisites
 
@@ -447,7 +555,7 @@ fraud_detection_durable/
 - **Azure OpenAI** — with a deployed chat model
 - **MCP Server** — Contoso tools on port 8000
 
-### Service Startup
+### Service Startup Order
 
 ```mermaid
 %%{init: {'theme': 'base'}}%%
@@ -507,23 +615,29 @@ cd ui && npm install && npm run dev
 
 ---
 
-## 🧪 Demo Scenarios
+## Demo Scenarios
 
 ### Scenario 1: Ambient Detection → Auto-Clear
 
-Watch the event feed — a multi-country login anomaly triggers automatic investigation. Low risk → auto-cleared.
+Watch the event feed — a multi-country login anomaly triggers automatic investigation. The agent assesses low risk → auto-cleared without human involvement.
+
+**What it proves:** Layer 1 rule engine triggering Layer 2 durable orchestration, with Layer 3 auto-clear path.
 
 ### Scenario 2: Ambient Detection → HITL Approval
 
-A spending spike triggers investigation. High risk → analyst reviews → approves "lock account".
+A spending spike triggers investigation. Agent assesses high risk → analyst reviews in the UI → approves "lock account" → action executed.
+
+**What it proves:** Full 3-layer flow including human-in-the-loop via durable external events.
 
 ### Scenario 3: Reject → Stateful Re-investigation
 
-Analyst rejects with feedback "check if VPN usage". Agent re-investigates with **full conversation history** (original alert + first analysis + analyst feedback).
+Analyst rejects with feedback "check if VPN usage." Agent re-investigates with **full conversation history** (original alert + first analysis + analyst feedback) and produces a refined assessment.
 
-### Scenario 4: Kill & Recover (Durability Proof) 💥
+**What it proves:** Entity state persistence enables meaningful multi-turn investigation across the HITL feedback loop.
 
-This is the most important demo — it proves the architecture isn't just theoretical:
+### Scenario 4: Kill & Recover — The Durability Proof 💥
+
+This is the critical scenario — it proves the architecture delivers on its durability claims:
 
 ```mermaid
 sequenceDiagram
@@ -555,15 +669,40 @@ sequenceDiagram
     Note over W2: Workflow completes normally! 🎉
 ```
 
+**Steps:**
 1. Start a high-risk workflow → reaches "Awaiting analyst review"
 2. `taskkill /F /IM python.exe` — kill all Python processes
 3. `uv run python worker.py` — restart the worker
 4. Submit analyst decision via UI
-5. **Workflow completes normally** — DTS replayed the orchestration from its event log ✅
+5. **Workflow completes normally** — DTS replayed the orchestration from its event log
 
 ---
 
-## 🔧 Configuration
+## Project Structure
+
+```
+fraud_detection_durable/
+├── worker.py                       # DTS Worker: orchestration + agent entity + activities
+├── backend.py                      # FastAPI BFF: REST API, WebSocket, SSE, event producer
+├── event_producer.py               # Layer 1: telemetry generation + anomaly detection
+├── fraud_analysis_workflow.py      # Inner workflow: fan-out → aggregate (Layer 2)
+├── provision_dts.ps1               # Azure DTS provisioning script
+├── .env                            # Configuration (Azure OpenAI, DTS, App Insights)
+├── pyproject.toml                  # Dependencies
+├── README.md                       # This file
+├── PRODUCTION_ARCHITECTURE.md      # Production deployment on Azure Container Apps
+└── ui/                             # React/Vite UI
+    ├── src/
+    │   ├── App.jsx                 # Main app: WebSocket + SSE connections
+    │   └── components/
+    │       ├── ControlPanel.jsx    # Alert selector + start button
+    │       ├── WorkflowVisualizer.jsx  # React Flow DAG visualization
+    │       ├── AnalystDecisionPanel.jsx  # HITL approve/reject/feedback
+    │       └── EventFeed.jsx       # Live telemetry feed (Layer 1)
+    └── package.json
+```
+
+## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -578,11 +717,9 @@ sequenceDiagram
 | `EVENT_INTERVAL_SECONDS` | Seconds between telemetry events | `3` |
 | `BACKEND_OBSERVABILITY` | Enable Application Insights | `false` |
 
----
+## Production Deployment
 
-## 📐 Production Deployment
-
-For Azure Container Apps deployment topology, security with Managed Identity, KEDA scaling, and cost estimation, see:
+For Azure Container Apps deployment topology, Managed Identity security, KEDA scaling, and cost estimation, see:
 
 👉 **[PRODUCTION_ARCHITECTURE.md](PRODUCTION_ARCHITECTURE.md)**
 
