@@ -13,10 +13,10 @@ const isSameOrigin = typeof window !== 'undefined' &&
   !window.location.port.includes('3000');   // Not React dev server
 
 // In production (same origin), use relative URLs. In dev, use localhost.
-const defaultBaseUrl = isSameOrigin ? '' : 'http://localhost:8002';
+const defaultBaseUrl = isSameOrigin ? '' : 'http://localhost:8001';
 const defaultWsUrl = isSameOrigin 
   ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
-  : 'ws://localhost:8002/ws';
+  : 'ws://localhost:8001/ws';
 
 /**
  * API configuration constants
@@ -28,6 +28,7 @@ export const API_CONFIG = {
     ALERTS: '/api/alerts',
     WORKFLOW_START: '/api/workflow/start',
     WORKFLOW_DECISION: '/api/workflow/decision',
+    EVENTS_STREAM: '/api/events/stream',
   },
 };
 
