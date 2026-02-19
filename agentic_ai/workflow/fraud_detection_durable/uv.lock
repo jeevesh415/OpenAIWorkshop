@@ -235,7 +235,7 @@ wheels = [
 
 [[package]]
 name = "agent-framework-durabletask"
-version = "1.0.0b260130"
+version = "1.0.0b260212"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-framework-core" },
@@ -243,9 +243,9 @@ dependencies = [
     { name = "durabletask-azuremanaged" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/95/9d5ee7fd1fdcd52c10aa1b2902964701d1d62b9d35cc7d05115b90db6329/agent_framework_durabletask-1.0.0b260130.tar.gz", hash = "sha256:63a2c8e0968a51d8e132892e9d385d2b82ccb95263d2c0316dc46b0eaa4dd7a4", size = 30285 }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/2f/3747a6346190bbcd37cde269999fee9c5ad60492d3706e8c4ee3019830f4/agent_framework_durabletask-1.0.0b260212.tar.gz", hash = "sha256:dd54fb07410c60c5ad4550f0feaf80a4660bbbb98d137f4f8298a91af0fa9406", size = 30617 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/22/122ed515935926137cc3c6ca795ef01b30feb82160cfc0f29a34f9d603de/agent_framework_durabletask-1.0.0b260130-py3-none-any.whl", hash = "sha256:a46e292800d10a62ce0923efe753594ddbf0bd6d1bb6e1258380f0dbf7d0302f", size = 36357 },
+    { url = "https://files.pythonhosted.org/packages/79/5e/31f877ed9ad8945ef719cdf4728536037146bfbd4580322b4318e7389dc9/agent_framework_durabletask-1.0.0b260212-py3-none-any.whl", hash = "sha256:8a96927c244bae1498fc9cd73782dac3b1efeccff14e64f738feba68d4584733", size = 36413 },
 ]
 
 [[package]]
@@ -980,6 +980,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "agent-framework" },
+    { name = "agent-framework-durabletask" },
     { name = "azure-identity" },
     { name = "azure-monitor-opentelemetry" },
     { name = "durabletask-azuremanaged" },
@@ -994,6 +995,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-framework", specifier = "==1.0.0b260212" },
+    { name = "agent-framework-durabletask", specifier = ">=1.0.0b260212" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-monitor-opentelemetry", specifier = ">=1.8.5" },
     { name = "durabletask-azuremanaged", specifier = ">=1.0.0a1" },

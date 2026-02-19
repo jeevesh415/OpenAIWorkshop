@@ -31,15 +31,17 @@ load_dotenv()
 # Add parent directories to path for the shared observability module
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # agentic_ai/
 
-try:
-    from observability import setup_observability
-    _observability_enabled = setup_observability(
-        service_name="contoso-fraud-workflow",
-        enable_live_metrics=True,
-        enable_sensitive_data=os.getenv("ENABLE_SENSITIVE_DATA", "false").lower() in ("1", "true", "yes"),
-    )
-except ImportError:
-    _observability_enabled = False
+_observability_enabled = False
+if os.getenv("BACKEND_OBSERVABILITY", "false").lower() in ("1", "true", "yes"):
+    try:
+        from observability import setup_observability
+        _observability_enabled = setup_observability(
+            service_name="contoso-fraud-workflow",
+            enable_live_metrics=True,
+            enable_sensitive_data=os.getenv("ENABLE_SENSITIVE_DATA", "false").lower() in ("1", "true", "yes"),
+        )
+    except (ImportError, Exception):
+        _observability_enabled = False
 
 # ------------------------------------------------------------------
 from azure.identity import DefaultAzureCredential
@@ -48,8 +50,10 @@ from durabletask.client import OrchestrationState
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+
+from event_producer import EventProducer, CUSTOMER_PROFILES, TelemetryEvent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -68,6 +72,7 @@ app = FastAPI(
 CORS_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
+    "http://localhost:8001",
     "http://localhost:8002",
 ]
 # Add Azure Container Apps URL if set
@@ -129,7 +134,9 @@ class AnalystDecisionRequest(BaseModel):
     """Analyst decision submitted from UI."""
     instance_id: str
     alert_id: str
-    approved_action: str
+    approved: bool = True  # True = approve action, False = reject with feedback
+    approved_action: str = "clear"
+    feedback: str = ""  # Feedback for re-investigation (when approved=False)
     analyst_notes: str = ""
     analyst_id: str = "analyst_ui"
 
@@ -248,6 +255,16 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+# ============================================================================
+# Event Producer (Layer 1 — Ambient Detection)
+# ============================================================================
+
+event_producer = EventProducer(
+    interval_seconds=float(os.getenv("EVENT_INTERVAL_SECONDS", "3.0")),
+    anomaly_probability=float(os.getenv("ANOMALY_PROBABILITY", "0.08")),
+)
+_event_producer_task: asyncio.Task | None = None
 
 
 # ============================================================================
@@ -438,7 +455,9 @@ async def submit_decision(request: AnalystDecisionRequest):
     
     decision = {
         "alert_id": request.alert_id,
+        "approved": request.approved,
         "approved_action": request.approved_action,
+        "feedback": request.feedback,
         "analyst_notes": request.analyst_notes,
         "analyst_id": request.analyst_id,
     }
@@ -460,6 +479,38 @@ async def submit_decision(request: AnalystDecisionRequest):
     })
     
     return {"status": "submitted", "instance_id": request.instance_id}
+
+
+# ============================================================================
+# SSE Endpoint — Live Event Feed (Layer 1 → UI)
+# ============================================================================
+
+
+@app.get("/api/events/stream")
+async def event_stream():
+    """Server-Sent Events stream of live telemetry + anomaly detections.
+
+    The React UI connects here with EventSource to display the Live Feed panel.
+    Events are JSON objects with event_type, customer_name, is_anomaly, etc.
+    """
+    queue = event_producer.subscribe()
+
+    async def generate():
+        try:
+            while True:
+                event = await queue.get()
+                data = json.dumps(event.to_dict())
+                yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            event_producer.unsubscribe(queue)
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # Disable nginx buffering
+    })
 
 
 # ============================================================================
@@ -529,17 +580,68 @@ async def websocket_endpoint(websocket: WebSocket, instance_id: str):
 @app.on_event("startup")
 async def startup():
     """Initialize on startup."""
+    global _event_producer_task
+    
     logger.info("="*60)
     logger.info("Starting Durable Fraud Detection Backend")
     logger.info("="*60)
     
-    # Pre-initialize DTS client
-    try:
-        get_dts_client()
-        logger.info("✓ DTS client initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize DTS client: {e}")
-        logger.error("Make sure DTS emulator is running")
+    # DTS client is lazy-initialized on first API call (get_dts_client()).
+    # Pre-init inside uvicorn's startup causes a CancelledError on Windows
+    # because gRPC's C extension installs a SIGINT handler that conflicts
+    # with asyncio's ProactorEventLoop signal handling.
+    logger.info("✓ DTS client will initialize on first request (lazy)")
+    
+    # Start Layer 1 event producer (ambient detection)
+    if os.getenv("EVENT_PRODUCER_ENABLED", "true").lower() in ("1", "true", "yes"):
+        async def alert_callback(alert_id, customer_id, alert_type, description, severity):
+            """Auto-submit detected anomaly to the durable workflow."""
+            try:
+                client = get_dts_client()
+                alert = {
+                    "alert_id": alert_id,
+                    "customer_id": customer_id,
+                    "alert_type": alert_type,
+                    "description": description,
+                    "timestamp": datetime.now().isoformat(),
+                    "severity": severity,
+                    "approval_timeout_hours": 0.05,
+                    "auto_detected": True,
+                }
+                instance_id = client.schedule_new_orchestration(
+                    ORCHESTRATION_NAME,
+                    input=alert,
+                    instance_id=f"fraud-{alert_id}-{int(time.time())}",
+                )
+                logger.info(f"🤖 Auto-submitted alert {alert_id} → orchestration {instance_id}")
+
+                # Broadcast workflow_auto_started to SSE so the UI can connect
+                started_event = TelemetryEvent(
+                    id=f"WF-{alert_id}",
+                    timestamp=alert["timestamp"],
+                    customer_id=customer_id,
+                    customer_name=CUSTOMER_PROFILES.get(customer_id, {}).get("name", f"Customer {customer_id}"),
+                    event_type="workflow_auto_started",
+                    details={
+                        "instance_id": instance_id,
+                        "alert_id": alert_id,
+                        "alert_type": alert_type,
+                        "description": description,
+                        "severity": severity,
+                    },
+                    is_anomaly=True,
+                    anomaly_rule=alert_type,
+                    alert_triggered=True,
+                )
+                await event_producer._broadcast(started_event)
+            except Exception as e:
+                logger.error(f"Failed to auto-submit alert: {e}")
+        
+        event_producer.set_alert_callback(alert_callback)
+        _event_producer_task = asyncio.create_task(event_producer.run())
+        logger.info("✓ Event producer started (Layer 1 ambient detection)")
+    else:
+        logger.info("⏸ Event producer disabled (set EVENT_PRODUCER_ENABLED=true to enable)")
     
     logger.info("Backend ready! 🚀")
 
@@ -548,6 +650,11 @@ async def startup():
 async def shutdown():
     """Cleanup on shutdown."""
     logger.info("Shutting down backend...")
+    
+    # Stop event producer
+    event_producer.stop()
+    if _event_producer_task:
+        _event_producer_task.cancel()
     
     # Cancel polling tasks
     for task in _polling_tasks.values():
@@ -562,7 +669,7 @@ async def shutdown():
 if __name__ == "__main__":
     import uvicorn
     
-    port = int(os.environ.get("BACKEND_PORT", "8002"))
+    port = int(os.environ.get("BACKEND_PORT", "8001"))
     uvicorn.run(
         app,
         host="0.0.0.0",

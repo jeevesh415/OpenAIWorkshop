@@ -75,6 +75,19 @@ def setup_observability(
         # Enable Agent Framework instrumentation
         enable_instrumentation(enable_sensitive_data=enable_sensitive_data)
         
+        # Workaround: agent_framework._tools.py calls
+        # model_dump_json(ensure_ascii=False), but Pydantic v2 doesn't
+        # support that kwarg, causing every tool call to fail with
+        # "Function failed". Monkeypatch BaseModel.model_dump_json to
+        # silently strip unsupported kwargs so observability doesn't
+        # break tool execution.  Remove once the library is fixed.
+        import pydantic
+        _orig_mdj = pydantic.BaseModel.model_dump_json
+        def _safe_model_dump_json(self, **kwargs):
+            kwargs.pop("ensure_ascii", None)
+            return _orig_mdj(self, **kwargs)
+        pydantic.BaseModel.model_dump_json = _safe_model_dump_json  # type: ignore[assignment]
+        
         _initialized = True
         print(f"✅ Application Insights observability enabled (service: {service_name})")
         logger.info(f"✅ Application Insights observability enabled (service: {service_name})")
@@ -84,9 +97,12 @@ def setup_observability(
         print(f"❌ Observability dependencies not installed: {e}")
         logger.warning(f"Observability dependencies not installed: {e}")
         return False
-    except Exception as e:
-        print(f"❌ Failed to configure observability: {e}")
-        logger.warning(f"Failed to configure observability: {e}")
+    except BaseException as e:
+        # Catch ALL errors including KeyboardInterrupt from import deadlocks
+        # in azure-ai-projects telemetry instrumentor (openai SDK version conflicts).
+        # Observability is never worth crashing the service.
+        print(f"⚠️ Observability setup failed (non-fatal): {type(e).__name__}: {e}")
+        logger.warning(f"Observability setup failed (non-fatal): {type(e).__name__}: {e}")
         return False
 
 

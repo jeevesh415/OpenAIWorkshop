@@ -43,6 +43,14 @@ export const ACTION_OPTIONS = [
 ];
 
 /**
+ * Decision modes
+ */
+export const DECISION_MODES = [
+  { value: 'approve', label: 'Approve Action', color: 'success' },
+  { value: 'reject', label: 'Reject & Request Re-investigation', color: 'error' },
+];
+
+/**
  * WebSocket ready states
  */
 export const WS_READY_STATES = {
