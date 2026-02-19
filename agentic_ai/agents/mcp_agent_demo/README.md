@@ -1,6 +1,6 @@
 # MCP Agent Demo — Agent Framework
 
-This demo shows five capabilities of the Microsoft Agent Framework:
+This demo shows eight capabilities of the Microsoft Agent Framework:
 
 | # | What | Script |
 |---|------|--------|
@@ -9,6 +9,9 @@ This demo shows five capabilities of the Microsoft Agent Framework:
 | 3 | **Workflow orchestrating local + remote (MCP) agents** | `workflow_local_remote.py` |
 | 4 | **Stateful agent-as-MCP server** (multi-turn sessions) | `mcp_server_stateful.py` |
 | 5 | **Stateful multi-turn client agent** conversation via MCP | `mcp_client_stateful.py` |
+| 6 | **Typed-contract multi-agent workflow** (structured data exchange) | `workflow_typed_contracts.py` |
+| 7 | **Hybrid MCP server** — strict-schema + natural-language tools in one endpoint | `mcp_server_hybrid.py` |
+| 8 | **Hybrid client** — demonstrates both tool types in a single incident flow | `mcp_client_hybrid.py` |
 
 ## Architecture
 
@@ -52,6 +55,40 @@ Client Agent (Coordinator)                     Server (FastMCP v3)
 [FastMCP v3](https://github.com/PrefectHQ/fastmcp) (default `stateless_http=False`)
 and maps each MCP `session_id` to an `AgentSession` that accumulates conversation
 history across tool calls.
+
+### Hybrid Mode (Scripts 7–8)
+
+```
+┌─────────────────────── Hybrid MCP Server (port 8002) ───────────────────────┐
+│                                                                              │
+│  STRICT-SCHEMA TOOLS (machines consume)     NL TOOLS (humans consume)        │
+│  ┌──────────────────────────────────┐       ┌────────────────────────────┐   │
+│  │ triage_alert                     │       │ ask_security_advisor       │   │
+│  │  raw text → SecurityAlert        │       │  free-form Q&A, policy     │   │
+│  │  (Pydantic, 12 fields)           │       │  advice, best practices    │   │
+│  ├──────────────────────────────────┤       ├────────────────────────────┤   │
+│  │ assess_threat                    │       │ explain_for_customer       │   │
+│  │  SecurityAlert → ThreatAssess.   │       │  translate technical       │   │
+│  │  (MITRE ATT&CK, score 0-100)    │       │  incident → plain English  │   │
+│  ├──────────────────────────────────┤       │  for executives, techs,    │   │
+│  │ create_response                  │       │  or compliance officers    │   │
+│  │  ThreatAssess. → IncidentResp.   │       └────────────────────────────┘   │
+│  │  (remediation actions, SLA)      │                                        │
+│  └──────────────────────────────────┘       ┌────────────────────────────┐   │
+│                                              │ get_session_info           │   │
+│  Session state: last_alert, last_threat,     │ reset_session              │   │
+│  last_response shared across all tools       └────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** Real MSP platforms need **both** tool types coexisting:
+- Strict-schema tools drive automation (isolation, blocking, SLA timers) —
+  wrong data means wrong remediation and a customer breach.
+- Natural-language tools help humans understand incidents and communicate
+  with customers — no schema needed, prose is the point.
+
+Both share the same session state, so `explain_for_customer` can reference
+the `IncidentResponse` that `create_response` just produced.
 
 ## Prerequisites
 
@@ -122,6 +159,90 @@ This runs a 3-turn conversation where each follow-up builds on the prior:
 
 The remote expert references prior turns because the `mcp-session-id` header
 ties all requests to the same server-side `AgentSession`.
+
+### 6. Run the Typed-Contract Workflow (standalone — no server needed)
+
+```bash
+cd agentic_ai/agents/mcp_agent_demo
+uv run python workflow_typed_contracts.py
+```
+
+This demonstrates **strict typed data exchange** between agents in an
+IT security incident response pipeline — the key advantage of
+framework-native orchestration over natural-language protocols like A2A.
+Built for an MSP / IT management platform where wrong data at any step
+means wrong automated response and a customer breach.
+
+```
+  ┌──────────────┐  SecurityAlert    ┌──────────────┐  ThreatAssessment
+  │  Alert       │ ────────────────▶ │  Threat      │ ────────────────────▶
+  │  Triage      │  (Pydantic)       │  Intel       │  (Pydantic)
+  └──────────────┘                   └──────────────┘
+                                                              │
+  ┌──────────────┐  IncidentResponse                          ▼
+  │  Response    │ ◀──────────────── ┌──────────────┐  ImpactAnalysis
+  │  Orchestrator│  (Pydantic)       │  Impact      │ ────────────────────▶
+  └──────────────┘                   │  Analyzer    │  (Pydantic)
+         │                           └──────────────┘
+         ▼
+   IncidentResponse  (drives automated remediation — isolation, blocking, SLA)
+```
+
+Each arrow represents a **Pydantic-validated contract**:
+- `SecurityAlert` — 12 fields, enum-constrained severity & alert source
+- `ThreatAssessment` — 11 fields, MITRE ATT&CK vectors, threat score (0-100)
+- `ImpactAnalysis` — 11 fields, blast-radius scope enum, endpoint counts
+- `IncidentResponse` — 15 fields, ordered remediation actions, SLA deadlines
+
+If any agent produces output that violates the schema, the pipeline fails
+fast with a Pydantic `ValidationError` — no silent corruption downstream.
+In IT security, "approximately right" gets customers breached.
+
+---
+
+### 7. Start the Hybrid MCP Server
+
+```bash
+cd agentic_ai/agents/mcp_agent_demo
+uv run python mcp_server_hybrid.py
+```
+
+This starts a **hybrid** MCP server on `http://localhost:8002/mcp` that
+exposes **both** strict-schema tools and natural-language tools:
+
+| Tool | Type | Input → Output |
+|------|------|----------------|
+| `triage_alert` | Strict schema | raw text → `SecurityAlert` (Pydantic) |
+| `assess_threat` | Strict schema | `SecurityAlert` → `ThreatAssessment` (Pydantic) |
+| `create_response` | Strict schema | `ThreatAssessment` → `IncidentResponse` (Pydantic) |
+| `ask_security_advisor` | Natural language | free-form question → prose answer |
+| `explain_for_customer` | Natural language | incident context → plain-English summary |
+| `get_session_info` | Utility | — → session metadata |
+| `reset_session` | Utility | — → clears session state |
+
+Session state is shared: strict tools store their outputs (`last_alert`,
+`last_threat`, `last_response`) so natural-language tools can reference them.
+
+### 8. Run the Hybrid Client (in a second terminal)
+
+```bash
+cd agentic_ai/agents/mcp_agent_demo
+uv run python mcp_client_hybrid.py
+```
+
+This runs a 5-step incident flow that uses **both** tool types:
+
+1. **`triage_alert`** (strict) — parse raw SIEM alert → `SecurityAlert`
+2. **`assess_threat`** (strict) — analyze alert → `ThreatAssessment` with MITRE ATT&CK mapping
+3. **`create_response`** (strict) — build response plan → `IncidentResponse` with remediation actions
+4. **`ask_security_advisor`** (NL) — "What compliance obligations apply?"
+5. **`explain_for_customer`** (NL) — draft executive-friendly incident notification
+
+Strict tools validate with Pydantic (fail fast on bad data).
+Natural-language tools produce human-readable prose.
+Both share the same MCP session.
+
+---
 
 ## How It Works
 
@@ -228,6 +349,47 @@ async with MCPStreamableHTTPTool(
         # The expert remembers all prior turns ✓
 ```
 
+### Typed-Contract Workflow (Structured Data Exchange)
+
+The typed-contract demo shows how `response_format` with Pydantic models
+creates strict data boundaries between agents — no natural language needed
+at the inter-agent boundary:
+
+```python
+from pydantic import BaseModel, Field
+from agent_framework import Agent, AgentResponse
+
+# Define the CONTRACT between Agent 1 and Agent 2
+class ThreatAssessment(BaseModel):
+    threat_score: float = Field(ge=0, le=100)
+    attack_vector: AttackVector       # MITRE ATT&CK enum
+    mitre_techniques: list[str]       # e.g. ["T1566.001", "T1059.001"]
+    confidence_pct: float = Field(ge=0, le=100)
+
+# Agent 1 produces typed output
+response: AgentResponse = await threat_intel_agent.run(
+    f"Analyze this alert:\n{alert.model_dump_json()}",
+    options={"response_format": ThreatAssessment},  # ← enforced schema
+)
+threat = cast(ThreatAssessment, response.value)  # ← validated Python object
+
+# Agent 2 consumes typed input (not prose!)
+impact_response = await impact_agent.run(
+    f"Assess blast radius:\n{threat.model_dump_json()}",
+    options={"response_format": ImpactAnalysis},
+)
+```
+
+**Why this matters vs. A2A / natural-language passing:**
+
+| Aspect | Natural Language (A2A) | Typed Contracts (this demo) |
+|--------|----------------------|-----------------------------|
+| Data format | Prose: "threat seems critical" | `threat.threat_score = 85.0` (float, 0-100) |
+| Validation | None — hope the LLM got it right | Pydantic validates at runtime |
+| Downstream action | LLM must re-interpret prose | Direct attribute → API call |
+| Failure mode | Silent corruption → wrong playbook | `ValidationError` — fail fast |
+| SLA tracking | "Pretty urgent" → which timer? | `severity=CRITICAL` → 15-min SLA |
+
 ## Dependencies
 
 | Package | Purpose |
@@ -236,4 +398,5 @@ async with MCPStreamableHTTPTool(
 | `agent-framework-orchestrations` | SequentialBuilder for workflows |
 | `mcp` | MCP SDK (used by stateless server via `mcp.server.fastmcp.FastMCP`) |
 | `fastmcp` | PrefectHQ FastMCP v3 (used by stateful server — session state support) |
+| `pydantic` | Typed contracts / schema validation (transitive via agent-framework-core) |
 | `python-dotenv` | Load credentials from `mcp/.env` |
