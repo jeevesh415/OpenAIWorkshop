@@ -125,9 +125,18 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - run: |
-          echo "Full deploy – ensuring TF state storage is reachable."
-          az storage account update --resource-group ${{ vars.TFSTATE_RG }} --name ${{ vars.TFSTATE_ACCOUNT }} --default-action Allow
-          az storage account update --resource-group ${{ vars.TFSTATE_RG }} --name ${{ vars.TFSTATE_ACCOUNT }} --public-network-access Enabled
+          echo "Full orchestrated run through. Should add unit testing and validation here later."
+          echo "MCAPS sub disables storage account networking, run a command to ensure the account is reachable."
+          if az group show --name "$TFSTATE_RG" > /dev/null 2>&1; then
+            az storage account update --resource-group "$TFSTATE_RG" --name "$TFSTATE_ACCOUNT" --default-action Allow
+            az storage account update --resource-group "$TFSTATE_RG" --name "$TFSTATE_ACCOUNT" --public-network-access Enabled
+          else
+            echo "::warning::Terraform state resource group '${TFSTATE_RG}' not found - skipping storage account network unlock"
+          fi
+        env:
+          TFSTATE_RG: ${{ vars.TFSTATE_RG }}
+          TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+          
 
   # ────────────────────────────────────────────────────────────────────
   # Step 2: Deploy infrastructure (full deploy only)
