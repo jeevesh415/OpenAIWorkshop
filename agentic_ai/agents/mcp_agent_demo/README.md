@@ -82,10 +82,10 @@ multi-agent orchestration where the MCP boundary is invisible.
 
 ```mermaid
 graph LR
-    L1["Layer 1\nAgent-as-a-Service"]
-    L2["Layer 2\nStateful Sessions"]
-    L3["Layer 3\nStrict + NL Tools"]
-    L4["Layer 4\nCross-Framework\nOrchestration"]
+    L1["Layer 1<br/>Agent-as-a-Service"]
+    L2["Layer 2<br/>Stateful Sessions"]
+    L3["Layer 3<br/>Strict + NL Tools"]
+    L4["Layer 4<br/>Cross-Framework<br/>Orchestration"]
 
     L1 --> L2 --> L3 --> L4
 
@@ -280,20 +280,20 @@ graph TB
         O["MAF / LangChain / AutoGen / CrewAI"]
     end
 
-    O -->|"call_tool()\nPattern 1: Agent-as-Tool"| MCP1
-    O -->|"call_tool()\nPattern 1: Agent-as-Tool"| MCP2
-    O -->|"Agent Adapter\nPattern 2: Native Participant"| MCP3
+    O -->|"call_tool()<br/>Pattern 1: Agent-as-Tool"| MCP1
+    O -->|"call_tool()<br/>Pattern 1: Agent-as-Tool"| MCP2
+    O -->|"Agent Adapter<br/>Pattern 2: Native Participant"| MCP3
 
     subgraph MCP1["MCP Server — Team Alpha"]
-        A1["MAF Agent\n+ Azure OpenAI\n+ Domain Tools"]
+        A1["MAF Agent<br/>+ Azure OpenAI<br/>+ Domain Tools"]
     end
 
     subgraph MCP2["MCP Server — Team Beta"]
-        A2["LangGraph ReAct Agent\n+ MemorySaver\n+ Architecture Tools"]
+        A2["LangGraph ReAct Agent<br/>+ MemorySaver<br/>+ Architecture Tools"]
     end
 
     subgraph MCP3["MCP Server — Team Gamma"]
-        A3["Any Framework\n+ Any Model\n+ Any Tools"]
+        A3["Any Framework<br/>+ Any Model<br/>+ Any Tools"]
     end
 
     style Orchestrator fill:#f3e5f5,stroke:#6a1b9a
@@ -316,14 +316,14 @@ servers. Consuming teams choose how to integrate:
 ```mermaid
 graph TB
     subgraph Registry["Agent / MCP Discovery Layer"]
-        D["MCP Server Registry\n(catalog of available agent-tools)"]
+        D["MCP Server Registry<br/>(catalog of available agent-tools)"]
     end
 
     subgraph Publishers["Agent Publishers"]
-        P1["Team A\nMAF Agent → MCP Server"]
-        P2["Team B\nLangGraph Agent → MCP Server"]
-        P3["Team C\nCrewAI Agent → MCP Server"]
-        P4["Team D\nCustom Agent → MCP Server"]
+        P1["Team A<br/>MAF Agent → MCP Server"]
+        P2["Team B<br/>LangGraph Agent → MCP Server"]
+        P3["Team C<br/>CrewAI Agent → MCP Server"]
+        P4["Team D<br/>Custom Agent → MCP Server"]
     end
 
     P1 -->|publish| D
@@ -335,12 +335,12 @@ graph TB
         direction TB
         subgraph C1["Consumer — Pattern 1: Agent-as-Tool"]
             CA1["Any Agent (any framework)"]
-            CA1 -->|"call_tool()"| TOOL["Remote Agent\nused as a tool"]
+            CA1 -->|"call_tool()"| TOOL["Remote Agent<br/>used as a tool"]
         end
         subgraph C2["Consumer — Pattern 2: Agent Adapter"]
             CA2["Multi-Agent Orchestration"]
             CA2 --> AD["Agent Adapter"]
-            AD -->|"wraps MCP tool as\nnative agent"| NATIVE["Remote Agent\nparticipates as native\nagent in orchestration"]
+            AD -->|"wraps MCP tool as<br/>native agent"| NATIVE["Remote Agent<br/>participates as native<br/>agent in orchestration"]
         end
     end
 
