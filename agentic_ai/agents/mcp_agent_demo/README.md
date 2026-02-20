@@ -34,9 +34,9 @@ that A2A provides:
 | Stateful sessions | ✅ `Mcp-Session-Id` | ✅ |
 | Streaming | ✅ SSE | ✅ SSE |
 | Long-running tasks (polling, cancellation, TTL) | ✅ | ✅ |
-| Mid-task user input (elicitation) | ✅ | ❌ |
+| Mid-task user input (elicitation) | ✅ | ✅ `INPUT_REQUIRED` |
 | OAuth 2.1 + OIDC auth | ✅ | ✅ |
-| Structured input/output schemas | ✅ | ✅ |
+| Structured input/output schemas | ✅ JSON Schema | ❌ Descriptive only |
 | Ecosystem adoption | 🟢 Every major LLM platform | 🟡 Growing |
 
 So instead of waiting for A2A to mature, you can use what you already
