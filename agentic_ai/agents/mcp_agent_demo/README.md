@@ -6,7 +6,7 @@ This demo shows eight capabilities of the Microsoft Agent Framework:
 |---|------|--------|
 | 1 | **Expose an agent as an MCP server** (stateless HTTP) | `mcp_server.py` |
 | 2 | **Consume the agent-powered MCP service** from another agent | `mcp_client_agent.py` |
-| 3 | **Workflow orchestrating local + remote (MCP) agents** | `workflow_local_remote.py` |
+| 3 | **Proxy agent workflow** — local agent + remote MCP agent (no intermediate LLM) | `workflow_proxy_agent.py` |
 | 4 | **Stateful agent-as-MCP server** (multi-turn sessions) | `mcp_server_stateful.py` |
 | 5 | **Stateful multi-turn client agent** conversation via MCP | `mcp_client_stateful.py` |
 | 6 | **Typed-contract multi-agent workflow** (structured data exchange) | `workflow_typed_contracts.py` |
@@ -17,24 +17,24 @@ This demo shows eight capabilities of the Microsoft Agent Framework:
 
 ### Stateless Mode (Scripts 1–3)
 
+Scripts 1 & 2 expose / consume an agent via MCP. Script 3 adds the
+**proxy agent pattern** — a `BaseAgent` with NO LLM that calls the MCP
+tool directly via `call_tool()`, eliminating wasteful intermediate reasoning.
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    Workflow (SequentialBuilder)               │
-│                                                              │
-│  ┌──────────────┐        ┌─────────────────────────────┐     │
-│  │ Local Agent   │  ───▶  │ Remote Agent (via MCP tool) │     │
-│  │ "Researcher"  │        │ "Expert Advisor"             │     │
-│  │ (in-process)  │        │ (MCPStreamableHTTPTool)      │     │
-│  └──────────────┘        └──────────┬──────────────────┘     │
-│                                      │ HTTP                   │
-└──────────────────────────────────────┼───────────────────────┘
-                                       ▼
-                          ┌────────────────────────┐
-                          │   MCP Server (port 8002)│
-                          │   Expert Advisor Agent   │
-                          │   (stateless_http=True)  │
-                          └────────────────────────┘
+SequentialBuilder Workflow
+┌──────────────────┐  text output   ┌──────────────────┐  direct call   ┌───────────────────────┐
+│  Researcher      │ ──────────────▶│  MCPProxyAgent   │ ─────────────▶│  MCP Server (8002)    │
+│  (LLM agent)     │                │  (BaseAgent)     │  call_tool()   │  ExpertAdvisor Agent  │
+│                  │                │  • NO LLM client │  HTTP          │  • analyze_risk       │
+│  Drafts initial  │                │  • Zero tokens   │               │  • get_market_data    │
+│  analysis        │                │  • Deterministic │               │  • summarize_findings │
+└──────────────────┘                └──────────────────┘               └───────────────────────┘
+    1 LLM call                          0 LLM calls                       Remote LLM call
 ```
+
+**Critical detail:** `run()` must be a regular `def` (not `async def`) —
+`SequentialBuilder` iterates with `async for`, which needs an async iterable.
 
 ### Stateful Mode (Scripts 4–5)
 
@@ -118,16 +118,18 @@ uv run python mcp_client_agent.py
 This creates a local agent that connects to the MCP server and delegates
 questions to the remote Expert Advisor agent.
 
-### 3. Run the Workflow Demo (in a second terminal)
+### 3. Run the Proxy Agent Workflow (in a second terminal)
 
 ```bash
 cd agentic_ai/agents/mcp_agent_demo
-uv run python workflow_local_remote.py
+uv run python workflow_proxy_agent.py
 ```
 
-This demonstrates a **SequentialBuilder** workflow that chains:
-1. A **local Researcher agent** (in-process) → drafts initial analysis
-2. A **remote Expert Advisor agent** (via MCP) → reviews and enhances
+This demonstrates a **SequentialBuilder** workflow using the **proxy agent
+pattern** — a `BaseAgent` with NO LLM that calls an MCP tool directly:
+1. **Researcher** (LLM agent) → drafts initial analysis
+2. **MCPProxyAgent** (no LLM) → forwards output directly to `ask_expert`
+   via `call_tool()` — zero local LLM overhead, deterministic routing
 
 ---
 
@@ -282,19 +284,33 @@ async with MCPStreamableHTTPTool(
         result = await agent.run("Analyze this business scenario...")
 ```
 
-### Workflow with Local + Remote Agents
+### Workflow with Proxy Agent (Local + Remote)
 
 ```python
+from agent_framework import BaseAgent, MCPStreamableHTTPTool, Message
 from agent_framework.orchestrations import SequentialBuilder
 
-# Local agent (in-process)
+class MCPProxyAgent(BaseAgent):
+    """No LLM — directly calls a known MCP tool."""
+    def __init__(self, *, mcp_tool, tool_name, param_name="question", **kw):
+        super().__init__(**kw)
+        self._mcp_tool, self._tool_name, self._param_name = mcp_tool, tool_name, param_name
+
+    def run(self, messages=None, *, stream=False, **kw):  # must be regular def
+        return self._stream(messages) if stream else self._impl(messages)
+
+    async def _impl(self, messages):
+        result = await self._mcp_tool.call_tool(self._tool_name, **{self._param_name: text})
+        ...
+
+# Local agent (LLM)
 researcher = client.as_agent(name="researcher", instructions="...")
 
-# Remote agent wrapper (via MCP tool)
-remote_expert = Agent(client=client, tools=mcp_tool, name="expert")
+# Proxy agent (NO LLM — direct MCP call)
+proxy = MCPProxyAgent(mcp_tool=mcp_tool, tool_name="ask_expert", name="proxy")
 
-# Sequential workflow: researcher → expert
-workflow = SequentialBuilder(participants=[researcher, remote_expert]).build()
+# Sequential workflow: researcher → proxy (zero LLM waste)
+workflow = SequentialBuilder(participants=[researcher, proxy]).build()
 result = await workflow.run("Analyze the market for electric bikes")
 ```
 

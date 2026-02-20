@@ -444,10 +444,11 @@ async def main() -> None:
     print(f"  Output : SecurityAlert (12 typed fields, enum-constrained)")
     print()
 
-    step1_response: AgentResponse = await triage_agent.run(
-        f"Triage this security alert and extract structured data:\n\n{raw_alert}",
-        options={"response_format": SecurityAlert},
-    )
+    async with triage_agent:
+        step1_response: AgentResponse = await triage_agent.run(
+            f"Triage this security alert and extract structured data:\n\n{raw_alert}",
+            options={"response_format": SecurityAlert},
+        )
     alert = cast(SecurityAlert, step1_response.value)
     _print_contract("SecurityAlert", alert)
 
@@ -461,13 +462,14 @@ async def main() -> None:
     print(f"  Output : ThreatAssessment (11 typed fields, range + enum constrained)")
     print()
 
-    step2_response: AgentResponse = await threat_intel_agent.run(
-        (
-            "Analyze this security alert with threat intelligence and classify the threat.\n\n"
-            f"Alert data:\n{alert.model_dump_json(indent=2)}"
-        ),
-        options={"response_format": ThreatAssessment},
-    )
+    async with threat_intel_agent:
+        step2_response: AgentResponse = await threat_intel_agent.run(
+            (
+                "Analyze this security alert with threat intelligence and classify the threat.\n\n"
+                f"Alert data:\n{alert.model_dump_json(indent=2)}"
+            ),
+            options={"response_format": ThreatAssessment},
+        )
     threat = cast(ThreatAssessment, step2_response.value)
     _print_contract("ThreatAssessment", threat)
 
@@ -481,19 +483,20 @@ async def main() -> None:
     print(f"  Output : ImpactAnalysis (11 typed fields, scope + count constrained)")
     print()
 
-    step3_response: AgentResponse = await impact_agent.run(
-        (
-            "Assess the impact and blast radius of this threat.\n\n"
-            f"Threat assessment:\n{threat.model_dump_json(indent=2)}\n\n"
-            f"Additional context from original alert:\n"
-            f"- Affected endpoint: {alert.affected_hostname} ({alert.affected_ip})\n"
-            f"- Tenant: {alert.tenant_id}\n"
-            f"- IOCs: {json.dumps(alert.indicators_of_compromise)}\n"
-            f"- Raw log mentions: CONTOSO-FS01 also affected 47 min earlier, "
-            f"3 failed RDP attempts from CONTOSO-WS-047"
-        ),
-        options={"response_format": ImpactAnalysis},
-    )
+    async with impact_agent:
+        step3_response: AgentResponse = await impact_agent.run(
+            (
+                "Assess the impact and blast radius of this threat.\n\n"
+                f"Threat assessment:\n{threat.model_dump_json(indent=2)}\n\n"
+                f"Additional context from original alert:\n"
+                f"- Affected endpoint: {alert.affected_hostname} ({alert.affected_ip})\n"
+                f"- Tenant: {alert.tenant_id}\n"
+                f"- IOCs: {json.dumps(alert.indicators_of_compromise)}\n"
+                f"- Raw log mentions: CONTOSO-FS01 also affected 47 min earlier, "
+                f"3 failed RDP attempts from CONTOSO-WS-047"
+            ),
+            options={"response_format": ImpactAnalysis},
+        )
     impact = cast(ImpactAnalysis, step3_response.value)
     _print_contract("ImpactAnalysis", impact)
 
@@ -507,18 +510,19 @@ async def main() -> None:
     print(f"  Output : IncidentResponse (15 typed fields, action-ready)")
     print()
 
-    step4_response: AgentResponse = await response_agent.run(
-        (
-            "Generate the incident response plan with specific automated actions.\n\n"
-            f"Impact analysis:\n{impact.model_dump_json(indent=2)}\n\n"
-            f"Threat context: {threat.attack_vector.value}, "
-            f"threat_score={threat.threat_score}, "
-            f"severity={alert.severity.value}\n"
-            f"Affected user: {alert.affected_user}\n"
-            f"IOCs to block: {json.dumps(alert.indicators_of_compromise)}"
-        ),
-        options={"response_format": IncidentResponse},
-    )
+    async with response_agent:
+        step4_response: AgentResponse = await response_agent.run(
+            (
+                "Generate the incident response plan with specific automated actions.\n\n"
+                f"Impact analysis:\n{impact.model_dump_json(indent=2)}\n\n"
+                f"Threat context: {threat.attack_vector.value}, "
+                f"threat_score={threat.threat_score}, "
+                f"severity={alert.severity.value}\n"
+                f"Affected user: {alert.affected_user}\n"
+                f"IOCs to block: {json.dumps(alert.indicators_of_compromise)}"
+            ),
+            options={"response_format": IncidentResponse},
+        )
     response = cast(IncidentResponse, step4_response.value)
     _print_contract("IncidentResponse", response)
 
