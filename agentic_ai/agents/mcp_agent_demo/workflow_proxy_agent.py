@@ -56,16 +56,12 @@ from agent_framework.orchestrations import SequentialBuilder
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  MCPProxyAgent — a BaseAgent with NO LLM that directly calls an MCP tool
+#  MCPProxyAgent — BaseAgent that forwards to a remote MCP tool
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class MCPProxyAgent(BaseAgent):
-    """Agent with NO LLM that directly calls a known MCP tool via call_tool().
-
-    Eliminates the LLM reasoning step that would otherwise just pick the
-    same tool every time — deterministic, zero-cost routing.
-    """
+    """BaseAgent that forwards messages to a remote MCP tool via call_tool()."""
 
     def __init__(
         self,
@@ -156,16 +152,8 @@ async def main() -> None:
     mcp_server_url = "http://localhost:8002/mcp"
 
     print("=" * 78)
-    print("🔀  PROXY AGENT — Direct MCP Tool Invocation Without LLM Reasoning")
+    print("🔀  Proxy Agent Workflow — Remote MCP Agent Integration")
     print("=" * 78)
-    print()
-    print("  This demo compares two approaches in a SequentialBuilder workflow:")
-    print()
-    print("  ❌  Traditional: Researcher → Expert(LLM+MCP) → MCP Server")
-    print("      ↳ Expert's LLM must reason about which tool to call (extra cost)")
-    print()
-    print("  ✅  Proxy Agent: Researcher → MCPProxyAgent → MCP Server")
-    print("      ↳ Proxy calls ask_expert directly — zero LLM overhead")
     print()
 
     # ── Connect to the MCP server ───────────────────────────────────────
@@ -198,16 +186,16 @@ async def main() -> None:
             ),
         )
 
-        # Agent 2: MCPProxyAgent — NO LLM, direct MCP call
+        # Agent 2: MCPProxyAgent — forwards to MCP
         proxy_expert = MCPProxyAgent(
             mcp_tool=mcp_tool,
-            tool_name="ask_expert",       # The exact MCP tool to invoke
-            param_name="question",         # Parameter name the tool expects
+            tool_name="ask_expert",
+            param_name="question",
             name="proxy_expert",
-            description="Proxy that directly calls the remote Expert Advisor MCP tool",
+            description="Proxy that calls the remote Expert Advisor MCP tool",
         )
 
-        # ── Build workflow: Researcher → Proxy Expert ───────────────────
+        # ── Build workflow ──────────────────────────────────────────────
         workflow = SequentialBuilder(
             participants=[researcher, proxy_expert],
         ).build()
@@ -217,8 +205,8 @@ async def main() -> None:
         print("━" * 78)
         print(f"📋 Topic: {topic}")
         print("━" * 78)
-        print("  Step 1: Researcher (LLM) → draft analysis")
-        print("  Step 2: MCPProxyAgent (NO LLM) → direct call to ask_expert MCP tool")
+        print("  Step 1: Researcher → draft analysis")
+        print("  Step 2: MCPProxyAgent → forward to remote expert via MCP")
         print("━" * 78)
         print()
 
@@ -236,9 +224,9 @@ async def main() -> None:
             for msg in outputs[-1]:
                 name = msg.author_name or "unknown"
                 if name == "researcher":
-                    label = "🔬 Researcher (LLM — 1 LLM call)"
+                    label = "🔬 Researcher"
                 elif name == "proxy_expert":
-                    label = "🎯 Proxy Expert (NO local LLM — direct MCP call)"
+                    label = "🎯 Proxy Expert (via MCP)"
                 else:
                     label = f"👤 {name}"
                 print(f"\n{'─' * 78}")
@@ -248,39 +236,7 @@ async def main() -> None:
 
         print()
         print("=" * 78)
-        print("📊 COMPARISON: Traditional vs. Proxy Agent")
-        print("=" * 78)
-        print("""
-    ┌─────────────────────────────┬─────────────────────────────────────────┐
-    │  Traditional                │  Proxy Agent (this demo)                │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  2 local LLM calls:         │  1 local LLM call:                     │
-    │  • Researcher (LLM)         │  • Researcher (LLM)                    │
-    │  • Expert (LLM → pick tool) │  • ProxyAgent (direct call_tool)       │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  Expert LLM must reason     │  No reasoning — tool_name is hardcoded │
-    │  about which tool to call   │  at configuration time                 │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  Risk: LLM picks wrong tool │  Zero risk — deterministic routing     │
-    │  or hallucinates parameters │  with exact parameter forwarding       │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  Extra latency: ~1-3 sec    │  Eliminated — direct HTTP call to MCP  │
-    │  for LLM to reason          │                                        │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  Extra cost: LLM tokens for │  Zero extra cost — no tokens consumed  │
-    │  tool selection reasoning   │  for routing decision                  │
-    ├─────────────────────────────┼─────────────────────────────────────────┤
-    │  Good for: dynamic tool     │  Good for: known integrations,         │
-    │  selection, exploration     │  pipelines, cross-team orchestration   │
-    └─────────────────────────────┴─────────────────────────────────────────┘
-
-    The Proxy Agent pattern is ideal for intra-company agent orchestration
-    where you KNOW which remote service to call.  The remote MCP server's
-    agent still does its own LLM reasoning internally — the proxy just
-    eliminates the redundant local LLM call that would only pick the tool.
-        """)
-        print("=" * 78)
-        print("✅  Workflow complete — proxy agent called MCP directly, zero local LLM waste.")
+        print("✅  Workflow complete.")
         print("=" * 78)
 
 

@@ -1,39 +1,34 @@
 # MCP Agent Demo — Agent Framework
 
-This demo shows eight capabilities of the Microsoft Agent Framework:
+This demo shows seven capabilities of the Microsoft Agent Framework:
 
 | # | What | Script |
 |---|------|--------|
 | 1 | **Expose an agent as an MCP server** (stateless HTTP) | `mcp_server.py` |
 | 2 | **Consume the agent-powered MCP service** from another agent | `mcp_client_agent.py` |
-| 3 | **Proxy agent workflow** — local agent + remote MCP agent (no intermediate LLM) | `workflow_proxy_agent.py` |
+| 3 | **Proxy agent workflow** — local agent + remote MCP agent | `workflow_proxy_agent.py` |
 | 4 | **Stateful agent-as-MCP server** (multi-turn sessions) | `mcp_server_stateful.py` |
 | 5 | **Stateful multi-turn client agent** conversation via MCP | `mcp_client_stateful.py` |
-| 6 | **Typed-contract multi-agent workflow** (structured data exchange) | `workflow_typed_contracts.py` |
-| 7 | **Hybrid MCP server** — strict-schema + natural-language tools in one endpoint | `mcp_server_hybrid.py` |
-| 8 | **Hybrid client** — demonstrates both tool types in a single incident flow | `mcp_client_hybrid.py` |
+| 6 | **Hybrid MCP server** — strict-schema + natural-language tools in one endpoint | `mcp_server_hybrid.py` |
+| 7 | **Hybrid client** — demonstrates both tool types in a single incident flow | `mcp_client_hybrid.py` |
 
 ## Architecture
 
 ### Stateless Mode (Scripts 1–3)
 
-Scripts 1 & 2 expose / consume an agent via MCP. Script 3 adds the
-**proxy agent pattern** — a `BaseAgent` with NO LLM that calls the MCP
-tool directly via `call_tool()`, eliminating wasteful intermediate reasoning.
+Scripts 1 & 2 expose / consume an agent via MCP. Script 3 adds a
+SequentialBuilder workflow that chains a local agent with the remote
+MCP agent via `MCPProxyAgent`.
 
 ```
 SequentialBuilder Workflow
-┌──────────────────┐  text output   ┌──────────────────┐  direct call   ┌───────────────────────┐
+┌──────────────────┐  text output   ┌──────────────────┐  call_tool()   ┌───────────────────────┐
 │  Researcher      │ ──────────────▶│  MCPProxyAgent   │ ─────────────▶│  MCP Server (8002)    │
-│  (LLM agent)     │                │  (BaseAgent)     │  call_tool()   │  ExpertAdvisor Agent  │
-│                  │                │  • NO LLM client │  HTTP          │  • analyze_risk       │
-│  Drafts initial  │                │  • Zero tokens   │               │  • get_market_data    │
-│  analysis        │                │  • Deterministic │               │  • summarize_findings │
+│  (LLM agent)     │                │  (BaseAgent)     │  HTTP          │  ExpertAdvisor Agent  │
 └──────────────────┘                └──────────────────┘               └───────────────────────┘
-    1 LLM call                          0 LLM calls                       Remote LLM call
 ```
 
-**Critical detail:** `run()` must be a regular `def` (not `async def`) —
+**Note:** `MCPProxyAgent.run()` must be a regular `def` (not `async def`) —
 `SequentialBuilder` iterates with `async for`, which needs an async iterable.
 
 ### Stateful Mode (Scripts 4–5)
@@ -56,7 +51,7 @@ Client Agent (Coordinator)                     Server (FastMCP v3)
 and maps each MCP `session_id` to an `AgentSession` that accumulates conversation
 history across tool calls.
 
-### Hybrid Mode (Scripts 7–8)
+### Hybrid Mode (Scripts 6–7)
 
 ```
 ┌─────────────────────── Hybrid MCP Server (port 8002) ───────────────────────┐
@@ -125,11 +120,10 @@ cd agentic_ai/agents/mcp_agent_demo
 uv run python workflow_proxy_agent.py
 ```
 
-This demonstrates a **SequentialBuilder** workflow using the **proxy agent
-pattern** — a `BaseAgent` with NO LLM that calls an MCP tool directly:
-1. **Researcher** (LLM agent) → drafts initial analysis
-2. **MCPProxyAgent** (no LLM) → forwards output directly to `ask_expert`
-   via `call_tool()` — zero local LLM overhead, deterministic routing
+This runs a **SequentialBuilder** workflow that chains a local Researcher
+agent with the remote Expert Advisor via `MCPProxyAgent`:
+1. **Researcher** → drafts initial analysis
+2. **MCPProxyAgent** → forwards output to `ask_expert` via `call_tool()`
 
 ---
 
@@ -162,47 +156,9 @@ This runs a 3-turn conversation where each follow-up builds on the prior:
 The remote expert references prior turns because the `mcp-session-id` header
 ties all requests to the same server-side `AgentSession`.
 
-### 6. Run the Typed-Contract Workflow (standalone — no server needed)
-
-```bash
-cd agentic_ai/agents/mcp_agent_demo
-uv run python workflow_typed_contracts.py
-```
-
-This demonstrates **strict typed data exchange** between agents in an
-IT security incident response pipeline — the key advantage of
-framework-native orchestration over natural-language protocols like A2A.
-Built for an MSP / IT management platform where wrong data at any step
-means wrong automated response and a customer breach.
-
-```
-  ┌──────────────┐  SecurityAlert    ┌──────────────┐  ThreatAssessment
-  │  Alert       │ ────────────────▶ │  Threat      │ ────────────────────▶
-  │  Triage      │  (Pydantic)       │  Intel       │  (Pydantic)
-  └──────────────┘                   └──────────────┘
-                                                              │
-  ┌──────────────┐  IncidentResponse                          ▼
-  │  Response    │ ◀──────────────── ┌──────────────┐  ImpactAnalysis
-  │  Orchestrator│  (Pydantic)       │  Impact      │ ────────────────────▶
-  └──────────────┘                   │  Analyzer    │  (Pydantic)
-         │                           └──────────────┘
-         ▼
-   IncidentResponse  (drives automated remediation — isolation, blocking, SLA)
-```
-
-Each arrow represents a **Pydantic-validated contract**:
-- `SecurityAlert` — 12 fields, enum-constrained severity & alert source
-- `ThreatAssessment` — 11 fields, MITRE ATT&CK vectors, threat score (0-100)
-- `ImpactAnalysis` — 11 fields, blast-radius scope enum, endpoint counts
-- `IncidentResponse` — 15 fields, ordered remediation actions, SLA deadlines
-
-If any agent produces output that violates the schema, the pipeline fails
-fast with a Pydantic `ValidationError` — no silent corruption downstream.
-In IT security, "approximately right" gets customers breached.
-
 ---
 
-### 7. Start the Hybrid MCP Server
+### 6. Start the Hybrid MCP Server
 
 ```bash
 cd agentic_ai/agents/mcp_agent_demo
@@ -225,7 +181,7 @@ exposes **both** strict-schema tools and natural-language tools:
 Session state is shared: strict tools store their outputs (`last_alert`,
 `last_threat`, `last_response`) so natural-language tools can reference them.
 
-### 8. Run the Hybrid Client (in a second terminal)
+### 7. Run the Hybrid Client (in a second terminal)
 
 ```bash
 cd agentic_ai/agents/mcp_agent_demo
@@ -284,14 +240,14 @@ async with MCPStreamableHTTPTool(
         result = await agent.run("Analyze this business scenario...")
 ```
 
-### Workflow with Proxy Agent (Local + Remote)
+### Integrating a Remote MCP Agent into a Workflow
 
 ```python
 from agent_framework import BaseAgent, MCPStreamableHTTPTool, Message
 from agent_framework.orchestrations import SequentialBuilder
 
 class MCPProxyAgent(BaseAgent):
-    """No LLM — directly calls a known MCP tool."""
+    """Forwards messages to a remote MCP tool via call_tool()."""
     def __init__(self, *, mcp_tool, tool_name, param_name="question", **kw):
         super().__init__(**kw)
         self._mcp_tool, self._tool_name, self._param_name = mcp_tool, tool_name, param_name
@@ -303,13 +259,9 @@ class MCPProxyAgent(BaseAgent):
         result = await self._mcp_tool.call_tool(self._tool_name, **{self._param_name: text})
         ...
 
-# Local agent (LLM)
 researcher = client.as_agent(name="researcher", instructions="...")
-
-# Proxy agent (NO LLM — direct MCP call)
 proxy = MCPProxyAgent(mcp_tool=mcp_tool, tool_name="ask_expert", name="proxy")
 
-# Sequential workflow: researcher → proxy (zero LLM waste)
 workflow = SequentialBuilder(participants=[researcher, proxy]).build()
 result = await workflow.run("Analyze the market for electric bikes")
 ```
@@ -365,47 +317,6 @@ async with MCPStreamableHTTPTool(
         # The expert remembers all prior turns ✓
 ```
 
-### Typed-Contract Workflow (Structured Data Exchange)
-
-The typed-contract demo shows how `response_format` with Pydantic models
-creates strict data boundaries between agents — no natural language needed
-at the inter-agent boundary:
-
-```python
-from pydantic import BaseModel, Field
-from agent_framework import Agent, AgentResponse
-
-# Define the CONTRACT between Agent 1 and Agent 2
-class ThreatAssessment(BaseModel):
-    threat_score: float = Field(ge=0, le=100)
-    attack_vector: AttackVector       # MITRE ATT&CK enum
-    mitre_techniques: list[str]       # e.g. ["T1566.001", "T1059.001"]
-    confidence_pct: float = Field(ge=0, le=100)
-
-# Agent 1 produces typed output
-response: AgentResponse = await threat_intel_agent.run(
-    f"Analyze this alert:\n{alert.model_dump_json()}",
-    options={"response_format": ThreatAssessment},  # ← enforced schema
-)
-threat = cast(ThreatAssessment, response.value)  # ← validated Python object
-
-# Agent 2 consumes typed input (not prose!)
-impact_response = await impact_agent.run(
-    f"Assess blast radius:\n{threat.model_dump_json()}",
-    options={"response_format": ImpactAnalysis},
-)
-```
-
-**Why this matters vs. A2A / natural-language passing:**
-
-| Aspect | Natural Language (A2A) | Typed Contracts (this demo) |
-|--------|----------------------|-----------------------------|
-| Data format | Prose: "threat seems critical" | `threat.threat_score = 85.0` (float, 0-100) |
-| Validation | None — hope the LLM got it right | Pydantic validates at runtime |
-| Downstream action | LLM must re-interpret prose | Direct attribute → API call |
-| Failure mode | Silent corruption → wrong playbook | `ValidationError` — fail fast |
-| SLA tracking | "Pretty urgent" → which timer? | `severity=CRITICAL` → 15-min SLA |
-
 ## Dependencies
 
 | Package | Purpose |
@@ -414,5 +325,4 @@ impact_response = await impact_agent.run(
 | `agent-framework-orchestrations` | SequentialBuilder for workflows |
 | `mcp` | MCP SDK (used by stateless server via `mcp.server.fastmcp.FastMCP`) |
 | `fastmcp` | PrefectHQ FastMCP v3 (used by stateful server — session state support) |
-| `pydantic` | Typed contracts / schema validation (transitive via agent-framework-core) |
 | `python-dotenv` | Load credentials from `mcp/.env` |
