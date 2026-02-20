@@ -1,23 +1,40 @@
 """
-Part 8 — LangGraph Agent as MCP Server (Cross-Framework Interop)
+Part 8 — Stateful LangGraph Agent as MCP Server (Cross-Framework Interop)
 
-A LangGraph-based Technical Architect agent exposed as an MCP endpoint.
-This demonstrates cross-framework interoperability: the agent is built
-entirely with LangGraph (ReAct loop + tools) but served over MCP so
-ANY framework — MAF, AutoGen, CrewAI — can consume it as a tool.
+A LangGraph-based Technical Architect agent exposed as a **stateful**
+MCP endpoint using PrefectHQ FastMCP v3.  Each MCP session gets its own
+LangGraph conversation thread (via MemorySaver checkpointer), so the
+agent remembers prior turns without the client resending history.
 
-The LangGraph agent has architecture-related tools and uses a ReAct
-loop to reason about which tools to call and how to synthesize results.
+Cross-framework interoperability: the agent is built entirely with
+LangGraph (ReAct loop + tools) but any MCP client can consume it —
+MAF, AutoGen, CrewAI — regardless of framework.
+
+Architecture:
+  ┌──────────────────────────────────────────────────────┐
+  │  FastMCP  (stateful, streamable-http, port 8003)     │
+  │                                                      │
+  │  MCP session_id  →  LangGraph thread_id              │
+  │                      ↓                               │
+  │  LangGraph ReAct Agent + MemorySaver (conversation)  │
+  │    • evaluate_architecture_pattern                   │
+  │    • estimate_migration_effort                       │
+  │    • recommend_tech_stack                            │
+  │                                                      │
+  │  Tools:                                              │
+  │    ask_architect       — multi-turn architecture Q&A │
+  │    get_session_info    — session metadata             │
+  │    reset_conversation  — clear history                │
+  └──────────────────────────────────────────────────────┘
 
 Prerequisites:
-    uv sync  (installs langgraph, langchain-openai, langchain-core)
+    uv sync  (installs langgraph, langchain-openai, langchain-core, fastmcp)
 
 Usage:
     cd agentic_ai/agents/mcp_agent_demo
     uv run python mcp_server_langgraph.py
 """
 
-import asyncio
 import os
 import sys
 from typing import Annotated
@@ -28,12 +45,14 @@ from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "mcp", ".env")
 load_dotenv(env_path)
 
+from fastmcp import FastMCP
+from fastmcp.server.context import Context
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool as lc_tool
 from langchain_openai import AzureChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
-from mcp.server.fastmcp import FastMCP
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -103,13 +122,10 @@ def evaluate_architecture_pattern(pattern: str) -> str:
 
 
 @lc_tool
-def estimate_migration_effort(
-    source: str, target: str, components: int
-) -> str:
+def estimate_migration_effort(source: str, target: str, components: int) -> str:
     """Estimate migration effort from source to target architecture.
     source/target: e.g. 'monolith', 'microservices', 'serverless'.
     components: number of major components/modules to migrate."""
-    # Simulated effort estimation
     complexity_map = {
         ("monolith", "microservices"): ("HIGH", 18, 45),
         ("monolith", "serverless"): ("MEDIUM-HIGH", 12, 35),
@@ -117,9 +133,7 @@ def estimate_migration_effort(
         ("microservices", "serverless"): ("LOW-MEDIUM", 6, 15),
     }
     key = (source.strip().lower(), target.strip().lower())
-    complexity, base_weeks, base_cost_k = complexity_map.get(
-        key, ("MEDIUM", 8, 25)
-    )
+    complexity, base_weeks, base_cost_k = complexity_map.get(key, ("MEDIUM", 8, 25))
     weeks = base_weeks + (components * 2)
     cost_k = base_cost_k + (components * 8)
     return (
@@ -188,7 +202,7 @@ def recommend_tech_stack(domain: str, scale: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Build the LangGraph agent (ReAct loop)
+#  Build the LangGraph agent (ReAct loop with MemorySaver)
 # ═══════════════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT = (
@@ -197,28 +211,29 @@ SYSTEM_PROMPT = (
     "1. Use your tools to gather concrete data (patterns, estimates, tech stacks)\n"
     "2. Synthesize the tool outputs into a cohesive, actionable recommendation\n"
     "3. Be specific — cite numbers, timelines, and trade-offs\n"
-    "4. If the conversation has prior context, build on it rather than starting fresh\n"
+    "4. You are in a multi-turn conversation. Build on prior context rather than "
+    "starting fresh — reference earlier discussion points.\n"
     "Keep responses concise and structured."
 )
 
 tools = [evaluate_architecture_pattern, estimate_migration_effort, recommend_tech_stack]
+
+# MemorySaver keeps conversation history per thread_id in memory.
+# Each MCP session maps to a unique LangGraph thread.
+checkpointer = MemorySaver()
 
 
 def _build_model() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        azure_deployment=os.environ.get(
-            "AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1"
-        ),
-        api_version=os.environ.get(
-            "AZURE_OPENAI_API_VERSION", "2025-03-01-preview"
-        ),
+        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1"),
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2025-03-01-preview"),
     )
 
 
 def _build_graph():
-    """Build a LangGraph ReAct agent with architecture tools."""
+    """Build a LangGraph ReAct agent with architecture tools and checkpointer."""
     llm = _build_model()
     llm_with_tools = llm.bind_tools(tools)
 
@@ -239,34 +254,50 @@ def _build_graph():
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", should_continue)
     graph.add_edge("tools", "agent")
-    return graph.compile()
+    # Compile WITH checkpointer — state persisted per thread_id
+    return graph.compile(checkpointer=checkpointer)
 
 
 # Compile the graph at module level
 langgraph_agent = _build_graph()
 
+# Track turn count per session
+session_turns: dict[str, int] = {}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Expose via MCP (port 8003 — separate from the MAF server on 8002)
+#  Expose via stateful MCP (port 8003, PrefectHQ FastMCP)
 # ═══════════════════════════════════════════════════════════════════════════
 
-mcp_server = FastMCP(
-    "TechnicalArchitect",
-    stateless_http=True,
-    json_response=True,
-    host="0.0.0.0",
-    port=8003,
-)
+mcp_server = FastMCP("TechnicalArchitect")
 
 
-@mcp_server.tool()
+@mcp_server.tool
 async def ask_architect(
-    question: Annotated[str, "Architecture question or discussion context"],
+    question: Annotated[str, "Architecture question or follow-up message"],
+    ctx: Context,
 ) -> str:
-    """Ask the Technical Architect for architecture advice, design patterns,
-    migration strategies, or technology stack recommendations."""
+    """Ask the Technical Architect for architecture advice. The conversation
+    is maintained across calls within the same MCP session — just send the
+    new message, no need to resend history."""
+    session_id = ctx.session_id
+    await ctx.info(f"Session {session_id[:8]}… — processing message")
+
+    if session_id not in session_turns:
+        session_turns[session_id] = 0
+        await ctx.info("New conversation thread started")
+
+    session_turns[session_id] += 1
+    turn = session_turns[session_id]
+    await ctx.info(f"Processing turn {turn}")
+
+    # Use the MCP session_id as the LangGraph thread_id.
+    # The MemorySaver checkpointer accumulates messages per thread,
+    # so the agent sees full conversation history automatically.
+    config = {"configurable": {"thread_id": session_id}}
     result = await langgraph_agent.ainvoke(
-        {"messages": [HumanMessage(content=question)]}
+        {"messages": [HumanMessage(content=question)]},
+        config=config,
     )
     # Extract the last AI message (skip tool-call messages)
     for msg in reversed(result["messages"]):
@@ -276,19 +307,46 @@ async def ask_architect(
     return "No response generated."
 
 
+@mcp_server.tool
+async def get_session_info(ctx: Context) -> dict:
+    """Get metadata about the current conversation session."""
+    session_id = ctx.session_id
+    turn_count = session_turns.get(session_id, 0)
+    return {
+        "session_id": session_id,
+        "turn_count": turn_count,
+        "has_history": turn_count > 0,
+    }
+
+
+@mcp_server.tool
+async def reset_conversation(ctx: Context) -> str:
+    """Clear the conversation history for the current session."""
+    session_id = ctx.session_id
+    if session_id in session_turns:
+        del session_turns[session_id]
+        return f"Conversation cleared for session {session_id[:8]}…"
+    return "No conversation history to clear."
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("🏗️  LangGraph Technical Architect — MCP Server (port 8003)")
+    print("🏗️  LangGraph Technical Architect — Stateful MCP Server (port 8003)")
     print("=" * 70)
     print("   Endpoint:  http://localhost:8003/mcp")
-    print("   Tool:      ask_architect")
+    print("   Transport: Streamable HTTP (stateful sessions)")
+    print("   Tools:     ask_architect, get_session_info, reset_conversation")
     print("   Framework: LangGraph (cross-framework interop via MCP)")
     print()
     print("   Architecture tools available to the agent:")
     print("     • evaluate_architecture_pattern")
     print("     • estimate_migration_effort")
     print("     • recommend_tech_stack")
+    print()
+    print("   Session memory: MCP session_id → LangGraph thread_id")
+    print("     → conversation history maintained server-side")
+    print("     → clients send only the new message each turn")
     print("=" * 70)
-    mcp_server.run(transport="streamable-http")
+    mcp_server.run(transport="streamable-http", host="0.0.0.0", port=8003)
