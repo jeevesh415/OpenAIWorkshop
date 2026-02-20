@@ -1,18 +1,33 @@
 # MCP as the Universal Agent Interop Layer
 
-> Have teams expose their agentic capabilities as MCP tool servers.
-> Behind each tool? Whatever they want — multi-agent workflows, RAG
-> pipelines, LLM reasoning chains, or agents built with entirely
-> different frameworks. The caller doesn't know or care.
+## The Problem: Multi-Framework Reality
 
-This demo progressively proves that **MCP can serve as the universal
-interop layer** between AI agents — across frameworks, across machines,
-across multi-turn conversations.
+In any large organization, different teams build AI agents with different
+frameworks. One team uses **LangGraph**, another uses **Microsoft Agent
+Framework (MAF)**, a third runs **AutoGen** or **CrewAI**. Each
+framework has its own agent abstractions, orchestration patterns, and
+communication protocols.
 
-## Why MCP for Agent-to-Agent Communication?
+When you need these agents to work together — a multi-agent workflow
+where a business analyst agent hands off to a technical architect agent
+built by a different team — the framework boundary becomes a wall.
 
-The MCP specification now covers virtually every capability needed for
-agent-to-agent communication:
+**A2A (Agent-to-Agent protocol)** is the solution people typically reach
+for. It defines agent cards, task lifecycles, and cross-agent messaging.
+But in practice:
+
+- **A2A adoption is still early.** Few production systems use it today.
+- **Framework support is uneven.** Not all agentic frameworks have mature
+  A2A implementations.
+- **It adds conceptual overhead** — agent cards, task objects, streaming
+  negotiation — for what often boils down to "call this agent and get a
+  response."
+
+Meanwhile, **MCP (Model Context Protocol)** is everywhere. Virtually
+every major agentic framework — LangChain, LangGraph, MAF, AutoGen,
+CrewAI, OpenAI Agents SDK — already speaks MCP. Every LLM platform
+supports it. And the MCP specification now covers almost every capability
+that A2A provides:
 
 | Capability | MCP | A2A |
 |---|---|---|
@@ -24,19 +39,41 @@ agent-to-agent communication:
 | Structured input/output schemas | ✅ | ✅ |
 | Ecosystem adoption | 🟢 Every major LLM platform | 🟡 Growing |
 
-When an agent calls another agent via A2A, the LLM still sees it as a
-tool call. A2A wraps it in "agent identity" semantics. MCP keeps it as
-what it actually is — **a tool with typed I/O**. Less abstraction, less
-complexity, same result.
+So instead of waiting for A2A to mature, you can use what you already
+have: **expose agents as MCP tool servers and consume them from any
+framework, right now.**
 
-**Where MCP wins:**
-- Massive ecosystem — every major LLM platform speaks MCP
-- Typed contracts between teams — no "interpret my natural language" ambiguity
-- Simpler mental model — teams expose tools, done
+## Two Design Patterns
 
-**Where A2A still makes sense:**
-- Cross-organizational federation with unknown third parties
-- When you truly can't define schemas upfront
+This demo introduces two complementary patterns for cross-framework
+agent interop over MCP:
+
+### Pattern 1: Agent-as-Tool
+
+Expose an external agent as an **MCP tool endpoint**. The consuming
+agent calls it like any other tool — `call_tool("ask_expert", question)`
+— and gets a typed response back. The caller has no idea what framework,
+model, or infrastructure powers the tool.
+
+This is the simplest pattern. It works for stateless queries, and with
+MCP's session support (`Mcp-Session-Id`), it extends to stateful
+multi-turn conversations as well.
+
+### Pattern 2: Agent Adapter
+
+Go further: wrap the MCP tool in an **adapter** that presents the remote
+agent as a **native participant** in your framework's orchestration. The
+adapter handles protocol translation, message extraction, and session
+mapping so the orchestrator treats the remote agent identically to its
+local agents.
+
+In this demo, `MCPProxyAgent` adapts a LangGraph agent (running behind
+MCP on a different port) into a native MAF agent. MAF's `GroupChatBuilder`
+orchestrates it alongside local MAF agents — it cannot tell which
+participant is local and which is remote, or which framework powers it.
+
+This is the key insight: **you don't need A2A to do native multi-agent
+orchestration across frameworks. MCP + an adapter gets you there.**
 
 ## What This Demo Proves
 
@@ -60,7 +97,7 @@ graph LR
 
 ---
 
-### Layer 1: Agent-as-a-Service (Scripts 1–2)
+### Layer 1: Agent-as-a-Service (Scripts 1–2) — *Pattern 1: Agent-as-Tool*
 
 > Any agent can be exposed as an MCP tool server. Any other agent can
 > consume it. The caller doesn't know what's behind the tool.
@@ -154,11 +191,11 @@ graph TB
 
 ---
 
-### Layer 4: Cross-Framework Orchestration (Scripts 7–8)
+### Layer 4: Cross-Framework Orchestration (Scripts 7–8) — *Pattern 2: Agent Adapter*
 
 > MCP is framework-agnostic. A LangGraph agent behind MCP is
-> indistinguishable from a MAF agent. The orchestrator doesn't
-> know or care.
+> indistinguishable from a MAF agent. The `MCPProxyAgent` adapter
+> makes the framework boundary invisible to the orchestrator.
 
 ```mermaid
 graph TB
@@ -230,8 +267,8 @@ sequenceDiagram
 
 **This is the capstone.** Three execution models (local MAF, remote
 LangGraph via MCP, LLM orchestrator) participate in the same conversation.
-MAF's `GroupChatBuilder` treats all participants identically. **MCP made
-the framework boundary invisible.**
+MAF's `GroupChatBuilder` treats all participants identically. The Agent
+Adapter pattern made the framework boundary invisible.
 
 ---
 
@@ -243,9 +280,9 @@ graph TB
         O["MAF / LangChain / AutoGen / CrewAI"]
     end
 
-    O -->|"call_tool()"| MCP1
-    O -->|"call_tool()"| MCP2
-    O -->|"call_tool()"| MCP3
+    O -->|"call_tool()\nPattern 1: Agent-as-Tool"| MCP1
+    O -->|"call_tool()\nPattern 1: Agent-as-Tool"| MCP2
+    O -->|"Agent Adapter\nPattern 2: Native Participant"| MCP3
 
     subgraph MCP1["MCP Server — Team Alpha"]
         A1["MAF Agent\n+ Azure OpenAI\n+ Domain Tools"]
@@ -259,18 +296,70 @@ graph TB
         A3["Any Framework\n+ Any Model\n+ Any Tools"]
     end
 
-    Note1["The caller has no idea\nwhat's behind the tool"]
-
     style Orchestrator fill:#f3e5f5,stroke:#6a1b9a
     style MCP1 fill:#e3f2fd,stroke:#1565c0
     style MCP2 fill:#fff3e0,stroke:#e65100
     style MCP3 fill:#e8f5e9,stroke:#2e7d32
 ```
 
-When Team Alpha exposes their agent as an MCP tool server, and Team Beta
-calls it from LangGraph, and Team Gamma calls it from AutoGen — **nobody
-changed any code**. The MCP protocol handles discovery, invocation,
-state, and streaming. This is what A2A promises. MCP already delivers it.
+---
+
+## Conceptual Architecture: MCP as the Agent Interop Bus
+
+In production, teams across the organization publish their agents as MCP
+servers. Consuming teams choose how to integrate:
+
+- **As a tool** — call the remote agent like any function (`Pattern 1`)
+- **As a native agent** — wrap it in an adapter so it participates in
+  local multi-agent orchestration as a first-class citizen (`Pattern 2`)
+
+```mermaid
+graph TB
+    subgraph Registry["Agent / MCP Discovery Layer"]
+        D["MCP Server Registry\n(catalog of available agent-tools)"]
+    end
+
+    subgraph Publishers["Agent Publishers"]
+        P1["Team A\nMAF Agent → MCP Server"]
+        P2["Team B\nLangGraph Agent → MCP Server"]
+        P3["Team C\nCrewAI Agent → MCP Server"]
+        P4["Team D\nCustom Agent → MCP Server"]
+    end
+
+    P1 -->|publish| D
+    P2 -->|publish| D
+    P3 -->|publish| D
+    P4 -->|publish| D
+
+    subgraph Consumers["Agent Consumers"]
+        direction TB
+        subgraph C1["Consumer — Pattern 1: Agent-as-Tool"]
+            CA1["Any Agent (any framework)"]
+            CA1 -->|"call_tool()"| TOOL["Remote Agent\nused as a tool"]
+        end
+        subgraph C2["Consumer — Pattern 2: Agent Adapter"]
+            CA2["Multi-Agent Orchestration"]
+            CA2 --> AD["Agent Adapter"]
+            AD -->|"wraps MCP tool as\nnative agent"| NATIVE["Remote Agent\nparticipates as native\nagent in orchestration"]
+        end
+    end
+
+    D -->|discover| CA1
+    D -->|discover| CA2
+
+    style Registry fill:#fff9c4,stroke:#f9a825
+    style Publishers fill:#e8f5e9,stroke:#2e7d32
+    style C1 fill:#e3f2fd,stroke:#1565c0
+    style C2 fill:#fce4ec,stroke:#c62828
+    style AD fill:#fff3e0,stroke:#e65100
+```
+
+**The key idea:** every team publishes agents through MCP servers. Every
+consuming team — regardless of their framework — can discover and use
+those agents either as tools (simple, stateless or stateful calls) or as
+native participants in their own multi-agent orchestrations (via the
+Agent Adapter pattern). No A2A required. No framework lock-in. The
+protocol everyone already supports becomes the universal interop layer.
 
 ## Quick Start
 
