@@ -1,6 +1,6 @@
 # MCP Agent Demo — Agent Framework
 
-This demo shows seven capabilities of the Microsoft Agent Framework:
+This demo shows nine capabilities of the Microsoft Agent Framework:
 
 | # | What | Script |
 |---|------|--------|
@@ -11,6 +11,8 @@ This demo shows seven capabilities of the Microsoft Agent Framework:
 | 5 | **Stateful multi-turn client agent** conversation via MCP | `mcp_client_stateful.py` |
 | 6 | **Hybrid MCP server** — strict-schema + natural-language tools in one endpoint | `mcp_server_hybrid.py` |
 | 7 | **Hybrid client** — demonstrates both tool types in a single incident flow | `mcp_client_hybrid.py` |
+| 8 | **LangGraph agent as MCP server** — cross-framework interop | `mcp_server_langgraph.py` |
+| 9 | **Group Chat orchestration** — local + LangGraph agent + LLM planner | `workflow_group_chat.py` |
 
 ## Architecture
 
@@ -84,6 +86,40 @@ history across tool calls.
 
 Both share the same session state, so `explain_for_customer` can reference
 the `IncidentResponse` that `create_response` just produced.
+
+### Cross-Framework Group Chat (Scripts 8–9)
+
+Scripts 8 & 9 demonstrate **cross-framework interoperability**: a LangGraph
+agent is exposed via MCP and participates in a MAF GroupChat alongside a
+native MAF agent, orchestrated by an LLM-based planner.
+
+```
+GroupChatBuilder
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                         🎯 Planner (Orchestrator)                            │
+│                    LLM agent that decides who speaks next                     │
+│               returns: {next_speaker, terminate, reason}                     │
+└──────────────────┬──────────────────────────────┬────────────────────────────┘
+                   │                              │
+                   ▼                              ▼
+┌──────────────────────────────┐  ┌────────────────────────────────────────────┐
+│  👔 BusinessStrategist       │  │  🏗️  TechnicalArchitect (MCPProxyAgent)    │
+│  Local MAF Agent             │  │  ┌──────────────────────────────────────┐  │
+│  (Azure OpenAI)              │  │  │ call_tool("ask_architect", ...)      │  │
+│                              │  │  │         ↓ MCP HTTP (port 8003)       │  │
+│  • Business impact & ROI     │  │  │ ┌──────────────────────────────────┐ │  │
+│  • Risk mitigation           │  │  │ │ LangGraph ReAct Agent           │ │  │
+│  • Go-to-market strategy     │  │  │ │ • evaluate_architecture_pattern │ │  │
+│  • Customer experience       │  │  │ │ • estimate_migration_effort     │ │  │
+│                              │  │  │ │ • recommend_tech_stack          │ │  │
+└──────────────────────────────┘  │  │ └──────────────────────────────────┘ │  │
+                                  │  └──────────────────────────────────────┘  │
+                                  └────────────────────────────────────────────┘
+```
+
+**Key insight:** MCP is the universal connector. MAF's GroupChatBuilder
+doesn't know (or care) that one participant is LangGraph behind the scenes.
+This pattern works with any framework that can expose tools via MCP.
 
 ## Prerequisites
 
@@ -199,6 +235,45 @@ This runs a 5-step incident flow that uses **both** tool types:
 Strict tools validate with Pydantic (fail fast on bad data).
 Natural-language tools produce human-readable prose.
 Both share the same MCP session.
+
+---
+
+### 8. Start the LangGraph MCP Server
+
+```bash
+cd agentic_ai/agents/mcp_agent_demo
+uv run python mcp_server_langgraph.py
+```
+
+This starts a **LangGraph-based** Technical Architect agent as an MCP server
+on `http://localhost:8003/mcp`. The agent uses a ReAct loop with
+architecture-related tools:
+
+| Tool | Purpose |
+|------|---------|
+| `evaluate_architecture_pattern` | Evaluate microservices, monolith, serverless, event-driven patterns |
+| `estimate_migration_effort` | Estimate timeline, cost, and team size for a migration |
+| `recommend_tech_stack` | Recommend technologies for a given domain and scale |
+
+**Cross-framework interop:** The agent is built entirely with LangGraph
+but served via MCP — any MCP client can consume it regardless of framework.
+
+### 9. Run the Group Chat Orchestration (in a second terminal)
+
+```bash
+cd agentic_ai/agents/mcp_agent_demo
+uv run python workflow_group_chat.py
+```
+
+This runs a multi-agent **GroupChat** discussion using MAF's
+`GroupChatBuilder` with an LLM-based planner. Three roles participate:
+
+1. **🎯 Planner** (orchestrator) — decides who speaks next
+2. **👔 BusinessStrategist** (local MAF agent) — business impact, ROI, risk
+3. **🏗️ TechnicalArchitect** (LangGraph via MCP) — architecture, tech stack
+
+Each turn shows which agent was selected and their response. The planner
+alternates between participants to build a comprehensive strategy.
 
 ---
 
@@ -322,7 +397,10 @@ async with MCPStreamableHTTPTool(
 | Package | Purpose |
 |---------|---------|
 | `agent-framework-core` | Agent, MCPStreamableHTTPTool, tool decorator |
-| `agent-framework-orchestrations` | SequentialBuilder for workflows |
+| `agent-framework-orchestrations` | SequentialBuilder, GroupChatBuilder for workflows |
 | `mcp` | MCP SDK (used by stateless server via `mcp.server.fastmcp.FastMCP`) |
 | `fastmcp` | PrefectHQ FastMCP v3 (used by stateful server — session state support) |
+| `langgraph` | LangGraph — stateful agent graphs (used by Script 8) |
+| `langchain-openai` | Azure OpenAI integration for LangGraph agents |
+| `langchain-core` | LangChain core abstractions (messages, tools) |
 | `python-dotenv` | Load credentials from `mcp/.env` |
