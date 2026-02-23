@@ -651,20 +651,18 @@ async def main():
         print(f"   Make sure backend is running on {backend_url}")
         return
     
-    # 3. Check MCP server
-    mcp_uri = os.getenv("MCP_SERVER_URI", "http://localhost:8000/mcp")
-    print(f"\n🔌 MCP Server: {mcp_uri}")
-    
-    try:
-        import requests
-        health_check = requests.get(mcp_uri.replace("/mcp", "/health"), timeout=2)
-        print(f"✓ MCP server is responding")
-    except:
-        print(f"⚠ WARNING: Could not connect to MCP server")
-        print(f"   Make sure it's running: cd mcp && uv run python mcp_service.py")
-        if args.ci:
-            print(f"   CI mode: continuing without MCP server")
-        else:
+    # 3. Check MCP server (skip in CI — backend connects to deployed MCP internally)
+    if not args.ci:
+        mcp_uri = os.getenv("MCP_SERVER_URI", "http://localhost:8000/mcp")
+        print(f"\n🔌 MCP Server: {mcp_uri}")
+        
+        try:
+            import requests
+            health_check = requests.get(mcp_uri.replace("/mcp", "/health"), timeout=2)
+            print(f"✓ MCP server is responding")
+        except:
+            print(f"⚠ WARNING: Could not connect to MCP server")
+            print(f"   Make sure it's running: cd mcp && uv run python mcp_service.py")
             response = input("\nContinue anyway? (y/n): ")
             if response.lower() != 'y':
                 return

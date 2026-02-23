@@ -171,7 +171,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         # Non-streaming path - use run with stream=True to capture tool calls
         full_response = []
         response_stream = self._agent.run(prompt, stream=True, session=self._session)
-        async for chunk in response_stream.updates:
+        async for chunk in response_stream:
             # Extract tool calls from contents
             if hasattr(chunk, 'contents') and chunk.contents:
                 for content in chunk.contents:
@@ -233,7 +233,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         
         try:
             response_stream = self._agent.run(prompt, stream=True, session=self._session)
-            async for chunk in response_stream.updates:
+            async for chunk in response_stream:
                 # Process contents in the chunk
                 if hasattr(chunk, 'contents') and chunk.contents:
                     for content in chunk.contents:

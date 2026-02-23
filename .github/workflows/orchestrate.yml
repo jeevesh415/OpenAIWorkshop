@@ -180,6 +180,8 @@ jobs:
     uses: ./.github/workflows/update-containers.yml
     with:
       environment: ${{ needs.pipeline-config.outputs.environment }}
+      mcp_image_tag: ${{ github.sha }}
+      backend_image_tag: ${{ github.sha }}
     secrets: inherit
 
   # ────────────────────────────────────────────────────────────────────
@@ -320,20 +322,27 @@ jobs:
             --json number \
             --jq '.[0].number // empty')
 
-          if [ -n "$PR_NUMBER" ]; then
-            echo "✅ Found PR #${PR_NUMBER}"
-            echo "🔀 Merging ${BRANCH} → int-agentic..."
-            gh pr merge "$PR_NUMBER" \
+          if [ -z "$PR_NUMBER" ]; then
+            echo "📝 No open PR found — creating one automatically"
+            PR_URL=$(gh pr create \
               --repo "${{ github.repository }}" \
-              --squash \
-              --auto \
-              --subject "chore: merge ${BRANCH} into int-agentic (auto)" \
-              --body "Auto-merged after successful CI/CD pipeline run ${{ github.run_id }}"
-            echo "✅ PR #${PR_NUMBER} merge initiated"
-          else
-            echo "ℹ️ No open PR found from ${BRANCH} → int-agentic"
-            echo "   Create one with: gh pr create --base int-agentic --head ${BRANCH}"
+              --base int-agentic \
+              --head "$BRANCH" \
+              --title "chore: merge ${BRANCH} into int-agentic" \
+              --body "Auto-created by CI/CD pipeline run ${{ github.run_id }}")
+            echo "✅ Created PR: ${PR_URL}"
+            PR_NUMBER=$(echo "$PR_URL" | grep -oP '\d+$')
           fi
+
+          echo "✅ Found PR #${PR_NUMBER}"
+          echo "🔀 Merging ${BRANCH} → int-agentic..."
+          gh pr merge "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --squash \
+            --auto \
+            --subject "chore: merge ${BRANCH} into int-agentic (auto)" \
+            --body "Auto-merged after successful CI/CD pipeline run ${{ github.run_id }}"
+          echo "✅ PR #${PR_NUMBER} merge initiated"
 
   # ────────────────────────────────────────────────────────────────────
   # Step 8: Auto-destroy dev environment after successful merge

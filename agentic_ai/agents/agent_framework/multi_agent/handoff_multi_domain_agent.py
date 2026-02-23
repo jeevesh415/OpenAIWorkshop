@@ -592,7 +592,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         
         try:
             response_stream = agent.run(actual_prompt, stream=True, session=session)
-            async for chunk in response_stream.updates:
+            async for chunk in response_stream:
                 # Process contents in the chunk
                 if hasattr(chunk, 'contents') and chunk.contents:
                     for content in chunk.contents:
@@ -702,7 +702,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
                 full_response_handoff = []
                 try:
                     response_stream_handoff = new_agent.run(actual_prompt_handoff, stream=True, session=new_session)
-                    async for chunk in response_stream_handoff.updates:
+                    async for chunk in response_stream_handoff:
                         if hasattr(chunk, 'contents') and chunk.contents:
                             for content in chunk.contents:
                                 if content.type == "function_call":

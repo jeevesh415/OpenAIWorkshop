@@ -176,7 +176,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         chunks: List[str] = []
         
         response_stream = agent.run(prompt, stream=True, session=self._session)
-        async for chunk in response_stream.updates:
+        async for chunk in response_stream:
             # Track tool calls for evaluation
             if hasattr(chunk, 'contents') and chunk.contents:
                 for content in chunk.contents:
@@ -218,7 +218,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         chunks: List[str] = []
         
         response_stream = agent.run(prompt, stream=True, session=self._session)
-        async for chunk in response_stream.updates:
+        async for chunk in response_stream:
             # Handle tool calls with argument tracking
             if hasattr(chunk, 'contents') and chunk.contents:
                 for content in chunk.contents:
