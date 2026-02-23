@@ -15,6 +15,7 @@ import {
 import SecurityIcon from '@mui/icons-material/Security';
 import CloudSyncIcon from '@mui/icons-material/CloudSync';
 import WorkflowVisualizer from './components/WorkflowVisualizer';
+import EventFeed from './components/EventFeed';
 import { API_CONFIG } from './constants/config';
 import ControlPanel from './components/ControlPanel';
 import AnalystDecisionPanel from './components/AnalystDecisionPanel';
@@ -134,6 +135,19 @@ function App() {
           location_analysis_executor: 'running',
           billing_charge_executor: 'running',
         });
+        setPendingDecision(null);
+      } else if (customStatus.includes('Re-investigating')) {
+        // Re-investigation after analyst rejection - reset analysis nodes
+        setExecutorStates({
+          alert_router: 'completed',
+          usage_pattern_executor: 'running',
+          location_analysis_executor: 'running',
+          billing_charge_executor: 'running',
+          fraud_risk_aggregator: 'idle',
+          review_gateway: 'idle',
+        });
+        setPendingDecision(null);
+        setWorkflowRunning(true);
       } else if (customStatus.includes('Awaiting analyst')) {
         // Waiting for analyst - aggregation complete, waiting for human
         setExecutorStates({
@@ -179,8 +193,8 @@ function App() {
         }));
       }
 
-      // Check if decision is required
-      if (data.decision_required) {
+      // Check if decision is required (including re-investigation returns)
+      if (data.decision_required || customStatus.includes('Awaiting analyst')) {
         setPendingDecision({
           instance_id: instanceId,
           alert_id: selectedAlert?.alert_id,
@@ -238,11 +252,8 @@ function App() {
     if (data.type === 'decision_submitted') {
       setPendingDecision(null);
       setWorkflowRunning(true);
-      setExecutorStates((prev) => ({
-        ...prev,
-        review_gateway: 'completed',
-        fraud_action_executor: 'running',
-      }));
+      // Don't assume approve — the status_update handler will set the right state
+      // based on whether the orchestration goes to "Executing" or "Re-investigating"
     }
   }, [instanceId, selectedAlert, addEvent]);
 
@@ -299,8 +310,10 @@ function App() {
         body: JSON.stringify({
           instance_id: instanceId,
           alert_id: selectedAlert?.alert_id,
-          approved_action: decision.approved_action,
-          analyst_notes: decision.analyst_notes,
+          approved: decision.approved !== false,
+          approved_action: decision.approved_action || 'clear',
+          feedback: decision.feedback || '',
+          analyst_notes: decision.analyst_notes || '',
           analyst_id: 'analyst_ui',
         }),
       });
@@ -345,8 +358,8 @@ function App() {
         {/* Main Content */}
         <Container maxWidth={false} sx={{ flex: 1, py: 3, overflow: 'hidden' }}>
           <Grid container spacing={2} sx={{ height: '100%' }}>
-            {/* Left Column - Controls and Decision Panel */}
-            <Grid size={{ xs: 12, md: 2 }} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Left Column - Controls, Decision Panel, and Live Feed */}
+            <Grid size={{ xs: 12, md: 3 }} sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%', minHeight: 0 }}>
               <ControlPanel
                 alerts={alerts}
                 onStartWorkflow={handleStartWorkflow}
@@ -360,10 +373,41 @@ function App() {
                   onSubmit={handleSubmitDecision}
                 />
               )}
+
+              {/* Layer 1 Live Feed */}
+              <Box sx={{ flex: 1, minHeight: 200 }}>
+                <EventFeed
+                  onWorkflowAutoStarted={(alertData) => {
+                    // Connect the auto-triggered workflow to the visualizer
+                    const syntheticAlert = {
+                      alert_id: alertData.alert_id,
+                      customer_id: alertData.customer_id,
+                      alert_type: alertData.alert_type,
+                      description: alertData.description,
+                      severity: alertData.severity,
+                      auto_detected: true,
+                    };
+                    setSelectedAlert(syntheticAlert);
+                    setWorkflowRunning(true);
+                    setEvents([]);
+                    setExecutorStates({ alert_router: 'running' });
+                    setPendingDecision(null);
+                    setStepDetails({});
+                    // Setting instanceId triggers the WebSocket connection
+                    setInstanceId(alertData.instance_id);
+                    addEvent({
+                      type: 'workflow_auto_started',
+                      instance_id: alertData.instance_id,
+                      alert_id: alertData.alert_id,
+                      message: `Layer 1 auto-detected ${alertData.alert_type} — investigation started`,
+                    });
+                  }}
+                />
+              </Box>
             </Grid>
 
             {/* Center Column - Workflow Visualization */}
-            <Grid size={{ xs: 12, md: 10 }} sx={{ height: '100%' }}>
+            <Grid size={{ xs: 12, md: 9 }} sx={{ height: '100%' }}>
               <Paper elevation={3} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                 <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
                   <Typography variant="h6">Workflow Graph</Typography>

@@ -22,7 +22,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from agent_framework import ChatAgent, ChatMessage, Role, MCPStreamableHTTPTool
+from agent_framework import Agent as FrameworkAgent, AgentSession, ChatOptions, Message, Role, MCPStreamableHTTPTool
 from agent_framework.azure import AzureOpenAIChatClient
 
 from agents.base_agent import BaseAgent, ToolCallTrackingMixin
@@ -176,8 +176,8 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         
         # Track current agent and conversation history per domain
         self._current_domain = state_store.get(f"{session_id}_current_domain", None)
-        self._domain_agents: Dict[str, ChatAgent] = {}
-        self._domain_threads: Dict[str, Any] = {}
+        self._domain_agents: Dict[str, FrameworkAgent] = {}
+        self._domain_sessions: Dict[str, AgentSession] = {}
         self._initialized = False
         
         # Turn tracking for tool grouping
@@ -313,26 +313,26 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
                 agent_name=domain_id
             )
             
-            agent = ChatAgent(
+            agent = FrameworkAgent(
+                client=chat_client,
                 name=domain_id,
-                chat_client=chat_client,
                 instructions=domain_config["instructions"],
                 tools=domain_tools,  # Pass list of filtered AIFunction objects
-                model=self.openai_model_name,
+                default_options=ChatOptions(model_id=self.openai_model_name),
             )
             
             # Enter agent context
             await agent.__aenter__()
             self._domain_agents[domain_id] = agent
             
-            # Create or restore thread for this domain
-            thread_state_key = f"{self.session_id}_thread_{domain_id}"
-            thread_state = self.state_store.get(thread_state_key)
+            # Create or restore session for this domain
+            session_state_key = f"{self.session_id}_session_{domain_id}"
+            session_state = self.state_store.get(session_state_key)
             
-            if thread_state:
-                self._domain_threads[domain_id] = await agent.deserialize_thread(thread_state)
+            if session_state:
+                self._domain_sessions[domain_id] = AgentSession.from_dict(session_state)
             else:
-                self._domain_threads[domain_id] = agent.get_new_thread()
+                self._domain_sessions[domain_id] = agent.create_session()
 
         self._initialized = True
         logger.info(f"[HANDOFF] Initialized {len(self._domain_agents)} domain specialists with filtered tools")
@@ -563,9 +563,9 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         self._current_domain = target_domain
         self.state_store[f"{self.session_id}_current_domain"] = target_domain
 
-        # Get the specialist agent and thread
+        # Get the specialist agent and session
         agent = self._domain_agents[target_domain]
-        thread = self._domain_threads[target_domain]
+        session = self._domain_sessions[target_domain]
         
         # Prepare the prompt with context if this is a handoff
         actual_prompt = prompt
@@ -591,7 +591,8 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         full_response = []
         
         try:
-            async for chunk in agent.run_stream(actual_prompt, thread=thread):
+            response_stream = agent.run(actual_prompt, stream=True, session=session)
+            async for chunk in response_stream.updates:
                 # Process contents in the chunk
                 if hasattr(chunk, 'contents') and chunk.contents:
                     for content in chunk.contents:
@@ -677,9 +678,9 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
                         },
                     )
                 
-                # Get new agent and thread
+                # Get new agent and session
                 new_agent = self._domain_agents[new_target_domain]
-                new_thread = self._domain_threads[new_target_domain]
+                new_session = self._domain_sessions[new_target_domain]
                 
                 # Build context prefix
                 context_prefix = await self._build_context_prefix(target_domain, new_target_domain)
@@ -700,7 +701,8 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
                 # Get response from new agent
                 full_response_handoff = []
                 try:
-                    async for chunk in new_agent.run_stream(actual_prompt_handoff, thread=new_thread):
+                    response_stream_handoff = new_agent.run(actual_prompt_handoff, stream=True, session=new_session)
+                    async for chunk in response_stream_handoff.updates:
                         if hasattr(chunk, 'contents') and chunk.contents:
                             for content in chunk.contents:
                                 if content.type == "function_call":
@@ -747,7 +749,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
                 # Use handoff response
                 assistant_response = ''.join(full_response_handoff)
                 target_domain = new_target_domain
-                thread = new_thread
+                session = new_session
 
         # Send final result
         if self._ws_manager:
@@ -766,10 +768,10 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         ]
         self.append_to_chat_history(messages)
 
-        # Save thread state for this domain
-        thread_state_key = f"{self.session_id}_thread_{target_domain}"
-        new_state = await thread.serialize()
-        self.state_store[thread_state_key] = new_state
+        # Save session state for this domain
+        session_state_key = f"{self.session_id}_session_{target_domain}"
+        new_state = session.to_dict()
+        self.state_store[session_state_key] = new_state
 
         # Save overall state
         self._setstate({

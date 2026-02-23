@@ -416,17 +416,17 @@ async def _protected_resource_metadata(request: Request):
 #                               TOOL ENDPOINTS                               #  
 ##############################################################################  
 @mcp.tool(description="List all customers with basic info")  
-async def get_all_customers() -> List[CustomerSummary]:  
+async def get_all_customers() -> list:  
     data = await get_all_customers_async()
-    return [CustomerSummary(**r) for r in data]
+    return data
   
   
 @mcp.tool(description="Get a full customer profile including their subscriptions")  
 async def get_customer_detail(  
     customer_id: Annotated[int, "Customer identifier value"],  
-) -> CustomerDetail:  
+) -> dict:  
     data = await get_customer_detail_async(customer_id)
-    return CustomerDetail(**data)  
+    return data  
   
   
 @mcp.tool(  
@@ -436,26 +436,17 @@ async def get_customer_detail(
 )  
 async def get_subscription_detail(  
     subscription_id: Annotated[int, "Subscription identifier value"],  
-) -> SubscriptionDetail:  
+) -> dict:  
     data = await get_subscription_detail_async(subscription_id)
-
-    # Convert nested data to Pydantic models
-    invoices = []
-    for inv_data in data['invoices']:
-        payments = [Payment(**p) for p in inv_data['payments']]
-        invoices.append(Invoice(**{**inv_data, 'payments': payments}))
-    
-    service_incidents = [ServiceIncident(**si) for si in data['service_incidents']]
-    
-    return SubscriptionDetail(**{**data, 'invoices': invoices, 'service_incidents': service_incidents})  
+    return data  
   
   
 @mcp.tool(description="Return invoice‑level payments list")  
 async def get_invoice_payments(  
     invoice_id: Annotated[int, "Invoice identifier value"],  
-) -> List[Payment]:  
+) -> list:  
     data = await get_invoice_payments_async(invoice_id)
-    return [Payment(**r) for r in data]
+    return data
   
   
 @mcp.tool(description="Record a payment for a given invoice and get new outstanding balance")  
@@ -473,17 +464,15 @@ async def get_data_usage(
     start_date: Annotated[str, "Inclusive start date (YYYY-MM-DD)"],  
     end_date: Annotated[str, "Inclusive end date (YYYY-MM-DD)"],  
     aggregate: Annotated[bool, "Set to true for aggregate statistics"] = False,  
-) -> List[DataUsageRecord] | Dict[str, Any]:  
+) -> list | Dict[str, Any]:  
     result = await get_data_usage_async(subscription_id, start_date, end_date, aggregate)
-    if aggregate:
-        return result
-    return [DataUsageRecord(**r) for r in result]
+    return result
   
   
 @mcp.tool(description="List every active promotion (no filtering)")  
-async def get_promotions() -> List[Promotion]:  
+async def get_promotions() -> list:  
     data = await get_promotions_async()
-    return [Promotion(**r) for r in data]
+    return data
   
   
 @mcp.tool(  
@@ -492,9 +481,9 @@ async def get_promotions() -> List[Promotion]:
 )  
 async def get_eligible_promotions(  
     customer_id: Annotated[int, "Customer identifier value"],  
-) -> List[Promotion]:  
+) -> list:  
     data = await get_eligible_promotions_async(customer_id)
-    return [Promotion(**r) for r in data]  
+    return data  
   
   
 # ─── Knowledge Base Search ───────────────────────────────────────────────  
@@ -502,27 +491,27 @@ async def get_eligible_promotions(
 async def search_knowledge_base(  
     query: Annotated[str, "Natural language query"],  
     topk: Annotated[int, "Number of top documents to return"] = 3,  
-) -> List[KBDoc]:  
+) -> list:  
     data = await search_knowledge_base_async(query, topk)
-    return [KBDoc(**r) for r in data]
+    return data
   
   
 # ─── Security Logs ───────────────────────────────────────────────────────  
 @mcp.tool(description="Security events for a customer (newest first)")  
 async def get_security_logs(  
     customer_id: Annotated[int, "Customer identifier value"],  
-) -> List[SecurityLog]:  
+) -> list:  
     data = await get_security_logs_async(customer_id)
-    return [SecurityLog(**r) for r in data]
+    return data
   
   
 # ─── Orders ──────────────────────────────────────────────────────────────  
 @mcp.tool(description="All orders placed by a customer")  
 async def get_customer_orders(  
     customer_id: Annotated[int, "Customer identifier value"],  
-) -> List[Order]:  
+) -> list:  
     data = await get_customer_orders_async(customer_id)
-    return [Order(**r) for r in data]
+    return data
   
   
 # ─── Support Tickets ────────────────────────────────────────────────────  
@@ -530,9 +519,9 @@ async def get_customer_orders(
 async def get_support_tickets(  
     customer_id: Annotated[int, "Customer identifier value"],  
     open_only: Annotated[bool, "Filter to open tickets"] = False,  
-) -> List[SupportTicket]:  
+) -> list:  
     data = await get_support_tickets_async(customer_id, open_only)
-    return [SupportTicket(**r) for r in data]
+    return data
   
   
 @mcp.tool(description="Create a new support ticket for a customer")  
@@ -543,9 +532,9 @@ async def create_support_ticket(
     priority: Annotated[str, "Ticket priority"],  
     subject: Annotated[str, "Ticket subject"],  
     description: Annotated[str, "Ticket description"],  
-) -> SupportTicket:  
+) -> dict:  
     data = await create_support_ticket_async(customer_id, subscription_id, category, priority, subject, description)
-    return SupportTicket(**data)
+    return data
   
   
 # ─── Products ────────────────────────────────────────────────────────────  
@@ -560,17 +549,17 @@ class Product(BaseModel):
 @mcp.tool(description="List / search available products (optional category filter)")  
 async def get_products(  
     category: Annotated[Optional[str], "Optional category filter"] = None,  
-) -> List[Product]:  
+) -> list:  
     data = await get_products_async(category)
-    return [Product(**r) for r in data]
+    return data
   
   
 @mcp.tool(description="Return a single product by ID")  
 async def get_product_detail(  
     product_id: Annotated[int, "Product identifier value"],  
-) -> Product:  
+) -> dict:  
     data = await get_product_detail_async(product_id)
-    return Product(**data)  
+    return data  
   
   
 # ─── Update Subscription ────────────────────────────────────────────────  

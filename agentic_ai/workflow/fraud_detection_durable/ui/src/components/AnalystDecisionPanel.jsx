@@ -12,32 +12,50 @@ import {
   Chip,
   Alert,
   Divider,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import GavelIcon from '@mui/icons-material/Gavel';
 import SendIcon from '@mui/icons-material/Send';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
 import { ACTION_OPTIONS } from '../constants/workflow';
 
 /**
- * Panel for analyst to make decisions on fraud alerts (Durable version)
- * @param {Object} props - Component props
- * @param {Object} props.decision - Decision request object with instance_id, alert_id, customer_id
- * @param {Function} props.onSubmit - Callback to submit decision
+ * Panel for analyst to approve or reject (with feedback) fraud alerts.
+ * Supports the stateful HITL feedback loop.
  */
 function AnalystDecisionPanel({ decision, onSubmit }) {
+  const [mode, setMode] = useState('approve'); // 'approve' or 'reject'
   const [selectedAction, setSelectedAction] = useState(
-    decision.recommended_action || 'block'
+    decision.recommended_action || 'lock_account'
   );
   const [notes, setNotes] = useState('');
+  const [feedback, setFeedback] = useState('');
 
   const handleSubmit = () => {
-    onSubmit({
-      instance_id: decision.instance_id,
-      alert_id: decision.alert_id,
-      customer_id: decision.customer_id,
-      approved_action: selectedAction,
-      analyst_notes: notes || 'Analyst decision from UI',
-      analyst_id: 'analyst_ui',
-    });
+    if (mode === 'approve') {
+      onSubmit({
+        instance_id: decision.instance_id,
+        alert_id: decision.alert_id,
+        customer_id: decision.customer_id,
+        approved: true,
+        approved_action: selectedAction,
+        analyst_notes: notes || 'Approved from UI',
+        analyst_id: 'analyst_ui',
+      });
+    } else {
+      onSubmit({
+        instance_id: decision.instance_id,
+        alert_id: decision.alert_id,
+        customer_id: decision.customer_id,
+        approved: false,
+        approved_action: '',
+        feedback: feedback || 'Please investigate further',
+        analyst_notes: notes,
+        analyst_id: 'analyst_ui',
+      });
+    }
   };
 
   return (
@@ -99,27 +117,71 @@ function AnalystDecisionPanel({ decision, onSubmit }) {
 
       <Divider sx={{ my: 0.5 }} />
 
-      {/* Decision Form */}
-      <FormControl fullWidth size="small" sx={{ minHeight: 40 }}>
-        <InputLabel sx={{ fontSize: '0.875rem' }}>Your Decision</InputLabel>
-        <Select
-          value={selectedAction}
-          label="Your Decision"
-          onChange={(e) => setSelectedAction(e.target.value)}
-          sx={{ fontSize: '0.875rem' }}
-        >
-          {ACTION_OPTIONS.map((option) => (
-            <MenuItem key={option.value} value={option.value} sx={{ fontSize: '0.875rem' }}>
-              {option.label}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      {/* Approve / Reject Toggle */}
+      <ToggleButtonGroup
+        value={mode}
+        exclusive
+        onChange={(e, val) => val && setMode(val)}
+        fullWidth
+        size="small"
+        sx={{ mb: 0.5 }}
+      >
+        <ToggleButton value="approve" color="success" sx={{ fontSize: '0.75rem', py: 0.5 }}>
+          <CheckCircleIcon fontSize="small" sx={{ mr: 0.5 }} />
+          Approve
+        </ToggleButton>
+        <ToggleButton value="reject" color="error" sx={{ fontSize: '0.75rem', py: 0.5 }}>
+          <CancelIcon fontSize="small" sx={{ mr: 0.5 }} />
+          Reject
+        </ToggleButton>
+      </ToggleButtonGroup>
+
+      {/* Approve: Action selector */}
+      {mode === 'approve' && (
+        <FormControl fullWidth size="small" sx={{ minHeight: 40 }}>
+          <InputLabel sx={{ fontSize: '0.875rem' }}>Action to Execute</InputLabel>
+          <Select
+            value={selectedAction}
+            label="Action to Execute"
+            onChange={(e) => setSelectedAction(e.target.value)}
+            sx={{ fontSize: '0.875rem' }}
+          >
+            {ACTION_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value} sx={{ fontSize: '0.875rem' }}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      )}
+
+      {/* Reject: Feedback field */}
+      {mode === 'reject' && (
+        <>
+          <Alert severity="info" sx={{ py: 0.25, px: 1 }}>
+            <Typography variant="caption">
+              Provide feedback for the AI to re-investigate with more context.
+            </Typography>
+          </Alert>
+          <TextField
+            label="Feedback for Re-investigation"
+            multiline
+            rows={3}
+            fullWidth
+            size="small"
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="e.g. Check billing charges in the last 7 days more carefully..."
+            sx={{ '& .MuiInputBase-input': { fontSize: '0.875rem' } }}
+            required
+          />
+        </>
+      )}
 
       <TextField
-        label="Analyst Notes"
+        label="Analyst Notes (optional)"
         multiline
-        rows={2}
+        rows={1}
         fullWidth
         size="small"
         value={notes}
@@ -130,14 +192,15 @@ function AnalystDecisionPanel({ decision, onSubmit }) {
 
       <Button
         variant="contained"
-        color="primary"
+        color={mode === 'approve' ? 'success' : 'error'}
         size="small"
         fullWidth
-        startIcon={<SendIcon fontSize="small" />}
+        startIcon={mode === 'approve' ? <CheckCircleIcon fontSize="small" /> : <CancelIcon fontSize="small" />}
         onClick={handleSubmit}
+        disabled={mode === 'reject' && !feedback.trim()}
         sx={{ mt: 0.5, py: 0.75 }}
       >
-        Submit Decision
+        {mode === 'approve' ? 'Approve & Execute' : 'Reject & Re-investigate'}
       </Button>
     </Paper>
   );
