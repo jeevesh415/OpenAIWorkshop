@@ -285,6 +285,14 @@ jobs:
   #   After a successful full deploy from a *-dev branch, automatically
   #   merge the open PR from that branch into int-agentic. This triggers
   #   the promote-to-main workflow which creates/updates a PR to main.
+  #
+  #   IMPORTANT: Uses GH_PAT (a Personal Access Token or GitHub App token)
+  #   instead of GITHUB_TOKEN so the push to int-agentic triggers
+  #   downstream workflows (promote-to-main.yml). Pushes made by
+  #   GITHUB_TOKEN do NOT trigger other workflows — this is a GitHub
+  #   Actions limitation to prevent infinite loops.
+  #   If GH_PAT is not configured, falls back to GITHUB_TOKEN (merge
+  #   still works, but promote-to-main won't auto-trigger).
   # ────────────────────────────────────────────────────────────────────
   auto-merge:
     needs: [pipeline-config, integration-tests, agent-evaluation]
@@ -299,7 +307,7 @@ jobs:
     steps:
       - name: Merge dev PR into int-agentic
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${{ github.ref_name }}"
           echo "🔍 Looking for open PR: ${BRANCH} → int-agentic"
