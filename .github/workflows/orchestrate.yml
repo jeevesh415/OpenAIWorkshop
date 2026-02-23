@@ -180,6 +180,8 @@ jobs:
     uses: ./.github/workflows/update-containers.yml
     with:
       environment: ${{ needs.pipeline-config.outputs.environment }}
+      mcp_image_tag: ${{ github.sha }}
+      backend_image_tag: ${{ github.sha }}
     secrets: inherit
 
   # ────────────────────────────────────────────────────────────────────
