@@ -4,7 +4,7 @@ a2a-sdk==0.3.12
     # via agent-framework-a2a
 ag-ui-protocol==0.1.10
     # via agent-framework-ag-ui
-agent-framework==1.0.0b260130
+agent-framework==1.0.0rc1
     # via applications (pyproject.toml)
 agent-framework-a2a==1.0.0b251114
     # via agent-framework-core
