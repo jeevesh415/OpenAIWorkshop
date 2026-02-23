@@ -336,7 +336,20 @@ jobs:
           fi
 
   # ────────────────────────────────────────────────────────────────────
-  # NOTE: Auto-destroy is disabled. All environments (integration-* and
-  # production) persist their infrastructure. To tear down an environment
-  # manually, use: workflow_dispatch → destroy.yml with the target env.
+  # Step 8: Auto-destroy dev environment after successful merge
+  #   Integration environments from *-dev branches are ephemeral.
+  #   After the code is merged to int-agentic, tear down the Azure
+  #   resources to save costs. Production environments are retained.
   # ────────────────────────────────────────────────────────────────────
+  auto-destroy:
+    needs: [pipeline-config, auto-merge]
+    if: >-
+      always()
+      && needs.auto-merge.result == 'success'
+      && needs.pipeline-config.outputs.full_deploy == 'true'
+      && github.event_name == 'push'
+      && endsWith(github.ref_name, '-dev')
+    uses: ./.github/workflows/destroy.yml
+    with:
+      environment: ${{ needs.pipeline-config.outputs.environment }}
+    secrets: inherit
