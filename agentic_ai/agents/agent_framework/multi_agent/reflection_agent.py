@@ -10,7 +10,7 @@ This agent implements a quality assurance workflow:
 import logging
 from typing import Any, Dict, List
 
-from agent_framework import AgentThread, ChatAgent, MCPStreamableHTTPTool
+from agent_framework import Agent as FrameworkAgent, AgentSession, ChatOptions, MCPStreamableHTTPTool
 from agent_framework.azure import AzureOpenAIChatClient
 
 from agents.base_agent import BaseAgent, ToolCallTrackingMixin
@@ -48,9 +48,9 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         max_refinements: int = 2,
     ) -> None:
         super().__init__(state_store, session_id)
-        self._primary_agent: ChatAgent | None = None
-        self._reviewer: ChatAgent | None = None
-        self._thread: AgentThread | None = None
+        self._primary_agent: FrameworkAgent | None = None
+        self._reviewer: FrameworkAgent | None = None
+        self._session: AgentSession | None = None
         self._initialized = False
         self._access_token = access_token
         self._ws_manager = None
@@ -103,31 +103,31 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         tools = await self._create_mcp_tools()
 
         # Create agents
-        self._primary_agent = ChatAgent(
+        self._primary_agent = FrameworkAgent(
+            client=chat_client,
             name="PrimaryAgent",
-            chat_client=chat_client,
             instructions=PRIMARY_AGENT_INSTRUCTIONS,
             tools=tools,
-            model=self.openai_model_name,
+            default_options=ChatOptions(model_id=self.openai_model_name),
         )
 
-        self._reviewer = ChatAgent(
+        self._reviewer = FrameworkAgent(
+            client=chat_client,
             name="Reviewer",
-            chat_client=chat_client,
             instructions=REVIEWER_INSTRUCTIONS,
             tools=tools,
-            model=self.openai_model_name,
+            default_options=ChatOptions(model_id=self.openai_model_name),
         )
 
         # Initialize agents
         await self._primary_agent.__aenter__()
         await self._reviewer.__aenter__()
 
-        # Load or create thread
+        # Load or create session
         if self.state:
-            self._thread = await self._primary_agent.deserialize_thread(self.state)
+            self._session = AgentSession.from_dict(self.state)
         else:
-            self._thread = self._primary_agent.get_new_thread()
+            self._session = self._primary_agent.create_session()
 
         self._initialized = True
         logger.info("[Reflection] Agents initialized")
@@ -152,13 +152,13 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
 
     async def _run_agent(
         self, 
-        agent: ChatAgent, 
+        agent: FrameworkAgent, 
         prompt: str, 
         agent_id: str,
     ) -> str:
         """Run an agent with optional streaming.
         
-        Even without WebSocket, we use run_stream to capture tool calls for evaluation.
+        Even without WebSocket, we use streaming to capture tool calls for evaluation.
         """
         if self._ws_manager:
             return await self._run_agent_streaming(agent, prompt, agent_id)
@@ -168,14 +168,15 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
     
     async def _run_agent_non_streaming(
         self,
-        agent: ChatAgent,
+        agent: FrameworkAgent,
         prompt: str,
         agent_id: str,
     ) -> str:
         """Run agent without WebSocket but still capture tool calls."""
         chunks: List[str] = []
         
-        async for chunk in agent.run_stream(prompt, thread=self._thread):
+        response_stream = agent.run(prompt, stream=True, session=self._session)
+        async for chunk in response_stream.updates:
             # Track tool calls for evaluation
             if hasattr(chunk, 'contents') and chunk.contents:
                 for content in chunk.contents:
@@ -201,7 +202,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
 
     async def _run_agent_streaming(
         self, 
-        agent: ChatAgent, 
+        agent: FrameworkAgent, 
         prompt: str, 
         agent_id: str,
     ) -> str:
@@ -216,7 +217,8 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         
         chunks: List[str] = []
         
-        async for chunk in agent.run_stream(prompt, thread=self._thread):
+        response_stream = agent.run(prompt, stream=True, session=self._session)
+        async for chunk in response_stream.updates:
             # Handle tool calls with argument tracking
             if hasattr(chunk, 'contents') and chunk.contents:
                 for content in chunk.contents:
@@ -270,7 +272,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
         logger.info(f"[Reflection] Processing: {prompt[:50]}...")
         
         await self._setup_agents()
-        if not self._primary_agent or not self._reviewer or not self._thread:
+        if not self._primary_agent or not self._reviewer or not self._session:
             raise RuntimeError("Agents not initialized")
 
         # Clear tool calls from previous request (from mixin)
@@ -333,7 +335,7 @@ class Agent(ToolCallTrackingMixin, BaseAgent):
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},
         ])
-        self._setstate(await self._thread.serialize())
+        self._setstate(self._session.to_dict())
 
         return response
 

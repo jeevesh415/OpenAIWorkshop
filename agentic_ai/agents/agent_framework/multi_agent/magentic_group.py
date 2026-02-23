@@ -7,17 +7,19 @@ from threading import Lock as ThreadLock
 from typing import Any, Callable, Dict, Iterable, List, Optional, cast
 
 from agent_framework import (
-    ChatAgent,
-    MagenticBuilder,
+    Agent as FrameworkAgent,
+    ChatOptions,
     MCPStreamableHTTPTool,
     WorkflowCheckpoint,
-    WorkflowOutputEvent,
+    WorkflowEvent,
     CheckpointStorage,
-    AgentRunUpdateEvent,
-    AgentRunEvent,
+    ResponseStream,
+    WorkflowRunResult,
+)
+from agent_framework_orchestrations import (
+    MagenticBuilder,
     MagenticOrchestratorEvent,
     MagenticOrchestratorEventType,
-    RequestInfoEvent,
     MagenticPlanReviewRequest,
     MagenticPlanReviewResponse,
 )
@@ -441,40 +443,29 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
     ) -> Any:
         participants = await self._create_participants(participant_client, tools)
 
-        builder = MagenticBuilder().participants(list(participants.values()))
-        
-        # Note: Streaming is now handled in _run_workflow by processing events from run_stream()
+        # Note: Streaming is now handled in _run_workflow by processing events from run()
         if self._ws_manager:
             logger.info(f"[STREAMING] WebSocket manager available for session_id={self.session_id}")
-            logger.info("[STREAMING] Events will be streamed via run_stream() processing")
+            logger.info("[STREAMING] Events will be streamed via run(stream=True) processing")
         
         # Create manager agent for the StandardMagenticManager
-        manager_agent = ChatAgent(
-            chat_client=manager_client,
+        manager_agent = FrameworkAgent(
+            client=manager_client,
             name="magentic_manager",
             instructions=self._manager_instructions,
         )
         
-        builder = (
-            builder
-            .with_manager(
-                agent=manager_agent,
-                max_round_count=self._max_round_count,
-                max_stall_count=self._max_stall_count,
-                max_reset_count=self._max_reset_count,
-                progress_ledger_prompt=self.CUSTOM_PROGRESS_LEDGER_PROMPT,
-            )
-            .with_checkpointing(checkpoint_storage)
+        # Build the MagenticBuilder with constructor kwargs (RC1 API)
+        builder = MagenticBuilder(
+            participants=list(participants.values()),
+            manager_agent=manager_agent,
+            max_round_count=self._max_round_count,
+            max_stall_count=self._max_stall_count,
+            max_reset_count=self._max_reset_count,
+            progress_ledger_prompt=self.CUSTOM_PROGRESS_LEDGER_PROMPT,
+            checkpoint_storage=checkpoint_storage,
+            enable_plan_review=self._enable_plan_review,
         )
-
-        # Optional: enable plan review
-        if self._enable_plan_review:
-            try:
-                builder = builder.with_plan_review(True)
-            except Exception as exc:
-                logger.warning(
-                    "[AgentFramework-Magentic] Failed to enable plan review: %s", exc
-                )
 
         return builder.build()
 
@@ -482,7 +473,7 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
         self,
         participant_client: AzureOpenAIChatClient,
         tools: Iterable[MCPStreamableHTTPTool] | None,
-    ) -> Dict[str, ChatAgent]:
+    ) -> Dict[str, FrameworkAgent]:
         # Get base MCP tool (connect once, filter per agent)
         base_mcp_tool = tools[0] if tools else None
         logger.info(f"[MCP PARTICIPANTS] Creating participants with base MCP tool: {base_mcp_tool}")
@@ -578,12 +569,12 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
             },
         }
 
-        participants: Dict[str, ChatAgent] = {}
+        participants: Dict[str, FrameworkAgent] = {}
         for participant_id, defaults in base_definitions.items():
             agent_kwargs: Dict[str, Any] = {
                 **defaults,
-                "chat_client": participant_client,
-                "model": self.openai_model_name,
+                "client": participant_client,
+                "default_options": ChatOptions(model_id=self.openai_model_name),
             }
             
             # Apply tool filtering for this participant's domain
@@ -602,7 +593,7 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
                 logger.warning(f"[MCP PARTICIPANTS] No tool filter for '{participant_id}', using all tools")
 
             merged_kwargs = self._apply_participant_overrides(participant_id, agent_kwargs)
-            agent = ChatAgent(**merged_kwargs)
+            agent = FrameworkAgent(**merged_kwargs)
             
             # Initialize agent session (MCP tool already connected above)
             await agent.__aenter__()
@@ -634,32 +625,37 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
         final_answer: str | None = None
 
         try:
-            # Start the initial stream
+            # Start the initial stream using the new run() API with stream=True
+            run_kwargs: Dict[str, Any] = {"stream": True}
             if checkpoint_id:
-                event_stream = workflow.run_stream_from_checkpoint(checkpoint_id, checkpoint_storage)
+                run_kwargs["checkpoint_id"] = checkpoint_id
+                run_kwargs["checkpoint_storage"] = checkpoint_storage
+            
+            if task is not None:
+                response_stream = workflow.run(task, **run_kwargs)
             else:
-                event_stream = workflow.run_stream(task)
+                response_stream = workflow.run(**run_kwargs)
 
             pending_responses: dict[str, Any] | None = None
             output_received = False
 
             while not output_received:
-                # If we have pending plan-review responses, resume via send_responses_streaming
+                # If we have pending plan-review responses, resume via run() with responses
                 if pending_responses is not None:
-                    event_stream = workflow.send_responses_streaming(pending_responses)
+                    response_stream = workflow.run(stream=True, responses=pending_responses)
                     pending_responses = None
 
-                pending_request: RequestInfoEvent | None = None
+                pending_request: WorkflowEvent | None = None
 
-                async for event in event_stream:
+                async for event in response_stream.updates:
                     # Stream events to WebSocket if available
                     await self._process_workflow_event(event)
 
-                    if isinstance(event, WorkflowOutputEvent):
+                    if event.type == "output":
                         final_answer = self._extract_text_from_event(event)
                         output_received = True
 
-                    elif isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+                    elif event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
                         # Capture plan review request — stream will pause after this
                         pending_request = event
 
@@ -696,8 +692,16 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
 
         return final_answer
 
-    async def _process_workflow_event(self, event: Any) -> None:
-        """Process workflow events and stream to WebSocket clients."""
+    async def _process_workflow_event(self, event: WorkflowEvent) -> None:
+        """Process workflow events and stream to WebSocket clients.
+        
+        In 1.0.0rc1, all events are WorkflowEvent with a .type field:
+        - 'magentic_orchestrator': plan, replan, progress ledger updates
+        - 'request_info': plan review requests
+        - 'data': streaming tokens from participant agents
+        - 'executor_completed': complete agent response
+        - 'output': final workflow output
+        """
         if not self._ws_manager:
             # Just log if no WebSocket manager
             if self._workflow_event_logging_enabled:
@@ -706,9 +710,10 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
 
         try:
             # Handle MagenticOrchestratorEvent (plan, replan, progress ledger)
-            if isinstance(event, MagenticOrchestratorEvent):
-                message_text = getattr(event.data, "text", "") or str(event.data)
-                kind = event.event_type.value  # e.g. "plan_created", "replanned", "progress_ledger_updated"
+            if event.type == "magentic_orchestrator" and isinstance(event.data, MagenticOrchestratorEvent):
+                orch_event = event.data
+                message_text = getattr(orch_event.content, "text", "") or str(orch_event.content)
+                kind = orch_event.event_type.value  # e.g. "plan_created", "replanned", "progress_ledger_updated"
                 await self._ws_manager.broadcast(
                     self.session_id,
                     {
@@ -718,10 +723,10 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
                     },
                 )
 
-            # Handle RequestInfoEvent for plan review
-            elif isinstance(event, RequestInfoEvent) and event.request_type is MagenticPlanReviewRequest:
+            # Handle plan review requests
+            elif event.type == "request_info" and event.request_type is MagenticPlanReviewRequest:
                 request_data = cast(MagenticPlanReviewRequest, event.data)
-                plan_text = getattr(request_data.plan, "text", "") or str(request_data.plan)
+                plan_text = getattr(request_data.plan, "text", "") or str(request_data.plan) if hasattr(request_data, "plan") else str(request_data)
                 await self._ws_manager.broadcast(
                     self.session_id,
                     {
@@ -732,8 +737,8 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
                     },
                 )
 
-            # Handle AgentRunUpdateEvent (streaming tokens from participant agents)
-            elif isinstance(event, AgentRunUpdateEvent) and event.data:
+            # Handle streaming tokens from participant agents (data events)
+            elif event.type == "data" and event.data:
                 agent_id = event.executor_id
 
                 if self._stream_agent_id != agent_id or not self._stream_line_open:
@@ -760,8 +765,8 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
                         },
                     )
             
-            # Handle AgentRunEvent (complete agent response)
-            elif isinstance(event, AgentRunEvent) and event.data:
+            # Handle complete agent response (executor_completed events)
+            elif event.type == "executor_completed" and event.data:
                 if self._stream_line_open:
                     self._stream_line_open = False
                 
@@ -782,8 +787,8 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
                     },
                 )
             
-            # Handle WorkflowOutputEvent (final result)
-            elif isinstance(event, WorkflowOutputEvent):
+            # Handle final workflow output
+            elif event.type == "output":
                 final_text = self._extract_text_from_event(event)
                 cleaned_final_text = self._sanitize_final_answer(final_text) or final_text
                 
@@ -806,13 +811,13 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
             logger.error("[AgentFramework-Magentic] Failed to process event: %s", exc, exc_info=True)
 
     @staticmethod
-    def _extract_text_from_event(event: WorkflowOutputEvent) -> str:
-        """Extract text content from WorkflowOutputEvent data.
+    def _extract_text_from_event(event: WorkflowEvent) -> str:
+        """Extract text content from a WorkflowEvent with type='output'.
         
         Handles various data formats:
-        - Single ChatMessage object with .text attribute
-        - List of ChatMessage objects
-        - AgentRunResponse with .text attribute
+        - Single Message object with .text attribute
+        - List of Message objects
+        - AgentResponse with .text attribute
         - Plain string
         """
         data = event.data
@@ -848,11 +853,11 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
         # Fallback: convert to string
         return str(data)
 
-    async def _log_workflow_event(self, event: Any) -> None:
-        if isinstance(event, WorkflowOutputEvent):
+    async def _log_workflow_event(self, event: WorkflowEvent) -> None:
+        if event.type == "output":
             logger.debug("[AgentFramework-Magentic] Workflow output event: %s", event.data)
         else:
-            logger.debug("[AgentFramework-Magentic] Workflow event emitted: %s", getattr(event, "name", type(event).__name__))
+            logger.debug("[AgentFramework-Magentic] Workflow event emitted: type=%s, executor=%s", event.type, event.executor_id)
 
     def _render_task_with_history(self, prompt: str) -> str:
         if not self.chat_history:
