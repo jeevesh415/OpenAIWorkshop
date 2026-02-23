@@ -647,7 +647,7 @@ DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
 
                 pending_request: WorkflowEvent | None = None
 
-                async for event in response_stream.updates:
+                async for event in response_stream:
                     # Stream events to WebSocket if available
                     await self._process_workflow_event(event)
 
