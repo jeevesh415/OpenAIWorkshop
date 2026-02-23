@@ -207,7 +207,6 @@ DEFAULT_AVAILABLE_AGENTS = [
     "agents.agent_framework.multi_agent.handoff_multi_domain_agent",
     "agents.agent_framework.multi_agent.magentic_group",
     "agents.agent_framework.multi_agent.reflection_agent",
-    "agents.agent_framework.multi_agent.reflection_workflow_agent",
 ]
 
 def _load_available_agents() -> List[str]:
@@ -403,7 +402,6 @@ async def list_agents(token: str = Depends(verify_token)):
             "handoff_multi_domain_agent": "Multi-agent system with domain-specific specialists and handoffs",
             "magentic_group": "MagenticOne-style orchestrator with specialist agents",
             "reflection_agent": "Agent with built-in reflection and self-critique",
-            "reflection_workflow_agent": "Workflow-based reflection with quality assurance gates",
         }
         description = descriptions.get(parts, "Agent module")
         

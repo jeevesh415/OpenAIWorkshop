@@ -11,7 +11,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv
 from azure.cosmos import CosmosClient, ContainerProxy, exceptions
-from azure.identity import AzureCliCredential
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 
 # Load environment variables
 load_dotenv()
@@ -42,10 +42,14 @@ _database = None
 
 
 def get_cosmos_client() -> CosmosClient:
-    """Get or create Cosmos DB client using Azure CLI credentials."""
+    """Get or create Cosmos DB client using managed identity or default credentials."""
     global _cosmos_client
     if _cosmos_client is None:
-        credential = AzureCliCredential()
+        azure_client_id = os.getenv("AZURE_CLIENT_ID")
+        if azure_client_id:
+            credential = ManagedIdentityCredential(client_id=azure_client_id)
+        else:
+            credential = DefaultAzureCredential()
         _cosmos_client = CosmosClient(COSMOSDB_ENDPOINT, credential=credential)
     return _cosmos_client
 

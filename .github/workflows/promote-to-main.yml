@@ -15,6 +15,7 @@ on:
       - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
+  workflow_dispatch:  # Allow manual trigger
 
 permissions:
   contents: read
