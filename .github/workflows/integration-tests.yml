@@ -64,7 +64,6 @@ jobs:
         run: |
           cd tests
           pytest -v -m "integration" --tb=short
-        continue-on-error: true  # Report results but don't fail the workflow
         env:
           BACKEND_API_ENDPOINT: ${{ inputs.backend_endpoint }}
           MCP_ENDPOINT: ${{ inputs.mcp_endpoint }}
