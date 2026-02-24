@@ -6,8 +6,7 @@ import time
 from dataclasses import dataclass, field  
 from typing import Any, Optional  
   
-from fastmcp import FastMCP  
-from fastmcp.server import Context  
+from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware  
 from fastmcp.server.middleware.logging import LoggingMiddleware  
 from fastmcp.server.middleware.timing import TimingMiddleware  
@@ -608,9 +607,6 @@ async def ask_account_expert(question: str, ctx: Context | None = None) -> dict:
 async def ask_product_expert(question: str, ctx: Context | None = None) -> dict:  
     assert ctx is not None  
     return await _run_domain_tool(ctx=ctx, domain=DOMAIN_PRODUCT, input=question)  
-from fastmcp.server import Context
-import asyncio
-
 
 # --- Entrypoint ---  
 if __name__ == "__main__":  
