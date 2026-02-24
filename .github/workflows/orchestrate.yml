@@ -2,15 +2,21 @@ name: CI/CD Pipeline
 
 # ─────────────────────────────────────────────────────────────────────
 # Pipeline modes:
-#   PR → main                ➜  tests-only  (validate against existing env)
-#   Push → main              ➜  full deploy  (deploy to production)
-#   Push → *-dev             ➜  full deploy  (deploy to integration-<name>)
-#   Manual dispatch          ➜  full deploy  (chosen environment)
+#   Push → *-dev             ➜  create PR to int-agentic (lightweight)
+#   PR → int-agentic         ➜  full deploy + test MERGE COMMIT → auto-merge
+#   PR → main                ➜  tests-only (validate against existing env)
+#   Push → main              ➜  full deploy to production
+#   Manual dispatch          ➜  full deploy (chosen environment)
 #
 # Promotion flow:
-#   *-dev push → full pipeline → auto-merge PR to int-agentic
+#   *-dev push → creates PR to int-agentic
+#   PR to int-agentic → deploys MERGE COMMIT → tests → auto-merge if pass
 #   int-agentic push → promote-to-main.yml → creates/updates PR to main
 #   main PR → human review + tests-only → merge → full deploy to production
+#
+# Key design: PRs to int-agentic build from the GitHub merge commit,
+# which combines the dev branch with int-agentic. This ensures we test
+# the MERGED result, not the dev branch in isolation.
 #
 # Per-developer environments:
 #   Each developer pushes to their own <name>-dev branch.
@@ -28,6 +34,7 @@ on:
 
   pull_request:
     branches:
+      - int-agentic
       - main
     paths-ignore:
       - '**/*.md'
@@ -60,20 +67,33 @@ jobs:
     outputs:
       environment: ${{ steps.config.outputs.environment }}
       full_deploy: ${{ steps.config.outputs.full_deploy }}
+      create_pr_only: ${{ steps.config.outputs.create_pr_only }}
     steps:
       - name: Determine pipeline mode
         id: config
         run: |
           EVENT="${{ github.event_name }}"
+          CREATE_PR_ONLY="false"
 
           # ── Resolve target environment ──
           if [ "$EVENT" = "workflow_dispatch" ]; then
             ENV="${{ inputs.target_env }}"
           elif [ "$EVENT" = "pull_request" ]; then
-            # PRs: resolve from the target (base) branch
             case "${{ github.base_ref }}" in
-              main)         ENV="production" ;;
-              *)            ENV="integration" ;;
+              main)
+                ENV="production" ;;
+              int-agentic)
+                # PR to int-agentic: extract dev name from head branch
+                HEAD="${{ github.head_ref }}"
+                case "$HEAD" in
+                  *-dev)
+                    DEV_NAME="${HEAD%-dev}"
+                    ENV="integration-${DEV_NAME}" ;;
+                  *)
+                    ENV="integration" ;;
+                esac ;;
+              *)
+                ENV="integration" ;;
             esac
           elif [ "$EVENT" = "push" ]; then
             BRANCH="${{ github.ref_name }}"
@@ -81,9 +101,10 @@ jobs:
               main)
                 ENV="production" ;;
               *-dev)
-                # Extract developer name: james-dev → integration-james
+                # Dev push: only create PR to int-agentic, no deploy
                 DEV_NAME="${BRANCH%-dev}"
-                ENV="integration-${DEV_NAME}" ;;
+                ENV="integration-${DEV_NAME}"
+                CREATE_PR_ONLY="true" ;;
               *)
                 ENV="integration" ;;
             esac
@@ -92,21 +113,74 @@ jobs:
           fi
 
           # ── Resolve pipeline mode ──
-          # PRs only run integration tests against the existing environment.
-          # Pushes and manual dispatches do a full deploy + build + test.
-          if [ "$EVENT" = "pull_request" ]; then
+          if [ "$CREATE_PR_ONLY" = "true" ]; then
             FULL_DEPLOY="false"
+          elif [ "$EVENT" = "pull_request" ] && [ "${{ github.base_ref }}" = "main" ]; then
+            # PRs to main: tests-only against existing environment
+            FULL_DEPLOY="false"
+          elif [ "$EVENT" = "pull_request" ] && [ "${{ github.base_ref }}" = "int-agentic" ]; then
+            # PRs to int-agentic: FULL deploy from merge commit
+            FULL_DEPLOY="true"
+          elif [ "$EVENT" = "push" ]; then
+            FULL_DEPLOY="true"
           else
             FULL_DEPLOY="true"
           fi
 
           echo "environment=$ENV" >> $GITHUB_OUTPUT
           echo "full_deploy=$FULL_DEPLOY" >> $GITHUB_OUTPUT
+          echo "create_pr_only=$CREATE_PR_ONLY" >> $GITHUB_OUTPUT
           echo "──────────────────────────────────────"
-          echo "Event:       $EVENT"
-          echo "Environment: $ENV"
-          echo "Full deploy: $FULL_DEPLOY"
+          echo "Event:          $EVENT"
+          echo "Environment:    $ENV"
+          echo "Full deploy:    $FULL_DEPLOY"
+          echo "Create PR only: $CREATE_PR_ONLY"
           echo "──────────────────────────────────────"
+
+  # ────────────────────────────────────────────────────────────────────
+  # Step 0.5: Create PR to int-agentic (*-dev push only)
+  #   When a developer pushes to their *-dev branch, we just create
+  #   (or update) a PR to int-agentic. The PR triggers the full pipeline
+  #   which builds from the MERGE COMMIT, testing combined code.
+  # ────────────────────────────────────────────────────────────────────
+  create-pr:
+    needs: pipeline-config
+    if: needs.pipeline-config.outputs.create_pr_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update PR to int-agentic
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          echo "🔍 Checking for existing PR: ${BRANCH} → int-agentic"
+
+          EXISTING_PR=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base int-agentic \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "✅ PR #${EXISTING_PR} already exists — push updated it"
+            echo "   The PR-triggered pipeline will run with the updated merge commit"
+          else
+            echo "📝 Creating PR: ${BRANCH} → int-agentic"
+            gh pr create \
+              --repo "${{ github.repository }}" \
+              --base int-agentic \
+              --head "$BRANCH" \
+              --title "Merge ${BRANCH} into int-agentic" \
+              --body "Auto-created by CI/CD pipeline.
+
+          This PR will be automatically merged after the pipeline validates
+          the **merge commit** (${BRANCH} + int-agentic combined).
+
+          Pipeline run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "✅ PR created — full pipeline will trigger on the new PR"
+          fi
 
   # ────────────────────────────────────────────────────────────────────
   # Step 1: Preflight – unlock Terraform state storage (full deploy only)
@@ -125,18 +199,16 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - run: |
-          echo "Full orchestrated run through. Should add unit testing and validation here later."
-          echo "MCAPS sub disables storage account networking, run a command to ensure the account is reachable."
+          echo "Preflight: ensuring Terraform state storage is accessible"
           if az group show --name "$TFSTATE_RG" > /dev/null 2>&1; then
             az storage account update --resource-group "$TFSTATE_RG" --name "$TFSTATE_ACCOUNT" --default-action Allow
             az storage account update --resource-group "$TFSTATE_RG" --name "$TFSTATE_ACCOUNT" --public-network-access Enabled
           else
-            echo "::warning::Terraform state resource group '${TFSTATE_RG}' not found - skipping storage account network unlock"
+            echo "::warning::Terraform state resource group '${TFSTATE_RG}' not found - skipping"
           fi
         env:
           TFSTATE_RG: ${{ vars.TFSTATE_RG }}
           TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
-          
 
   # ────────────────────────────────────────────────────────────────────
   # Step 2: Deploy infrastructure (full deploy only)
@@ -151,6 +223,8 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────
   # Step 3: Build containers (full deploy only)
+  #   For PRs to int-agentic, actions/checkout gets the MERGE COMMIT
+  #   so Docker images contain dev changes + int-agentic combined.
   # ────────────────────────────────────────────────────────────────────
   build-application-container:
     needs: [pipeline-config, deploy-infrastructure]
@@ -170,6 +244,7 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────
   # Step 4: Update Container Apps with new images (full deploy only)
+  #   Uses SHA-tagged images to force new Container App revisions.
   # ────────────────────────────────────────────────────────────────────
   update-containers:
     needs: [pipeline-config, build-application-container, build-mcp-container]
@@ -185,12 +260,13 @@ jobs:
     secrets: inherit
 
   # ────────────────────────────────────────────────────────────────────
-  # Resolve endpoints from existing environment (PR / tests-only path)
-  # Looks up Container App FQDNs via az cli instead of deploying infra.
+  # Resolve endpoints from existing environment (PR → main tests-only)
   # ────────────────────────────────────────────────────────────────────
   resolve-endpoints:
     needs: pipeline-config
-    if: needs.pipeline-config.outputs.full_deploy == 'false'
+    if: >-
+      needs.pipeline-config.outputs.full_deploy == 'false'
+      && needs.pipeline-config.outputs.create_pr_only == 'false'
     runs-on: ubuntu-latest
     environment: ${{ needs.pipeline-config.outputs.environment }}
     outputs:
@@ -213,8 +289,6 @@ jobs:
           ITERATION="${{ vars.ITERATION || '002' }}"
           RG="rg-${PROJECT}-${ENV}-${ITERATION}"
 
-          echo "Looking up endpoints in resource group: $RG"
-
           BE_FQDN=$(az containerapp show \
             --name "ca-be-${ITERATION}" \
             --resource-group "$RG" \
@@ -228,26 +302,15 @@ jobs:
           if [ -n "$BE_FQDN" ]; then
             echo "backend_endpoint=https://${BE_FQDN}" >> $GITHUB_OUTPUT
             echo "deployed=true" >> $GITHUB_OUTPUT
-            echo "✅ Backend: https://${BE_FQDN}"
           else
-            echo "::warning::Backend Container App not found in $RG – environment not yet deployed. Skipping PR tests."
+            echo "::warning::Backend not found in $RG"
             echo "backend_endpoint=" >> $GITHUB_OUTPUT
             echo "deployed=false" >> $GITHUB_OUTPUT
-            exit 0
           fi
-
-          if [ -n "$MCP_FQDN" ]; then
-            echo "mcp_endpoint=https://${MCP_FQDN}" >> $GITHUB_OUTPUT
-            echo "✅ MCP: https://${MCP_FQDN}"
-          else
-            echo "::warning::MCP Container App not found in $RG – MCP tests will be skipped"
-            echo "mcp_endpoint=" >> $GITHUB_OUTPUT
-          fi
+          echo "mcp_endpoint=${MCP_FQDN:+https://$MCP_FQDN}" >> $GITHUB_OUTPUT
 
   # ────────────────────────────────────────────────────────────────────
   # Step 5: Run integration tests
-  #   Full deploy path  → endpoints come from Terraform outputs
-  #   Tests-only path   → endpoints come from resolve-endpoints
   # ────────────────────────────────────────────────────────────────────
   integration-tests:
     needs: [pipeline-config, deploy-infrastructure, update-containers, resolve-endpoints]
@@ -266,8 +329,6 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────
   # Step 6: Agent quality evaluation (full deploy only)
-  #   Runs a subset of agent eval test cases against the deployed backend
-  #   and logs results to an independent AI Foundry project for trending.
   # ────────────────────────────────────────────────────────────────────
   agent-evaluation:
     needs: [pipeline-config, deploy-infrastructure, update-containers, integration-tests]
@@ -283,18 +344,9 @@ jobs:
     secrets: inherit
 
   # ────────────────────────────────────────────────────────────────────
-  # Step 7: Auto-merge dev branch PR into int-agentic
-  #   After a successful full deploy from a *-dev branch, automatically
-  #   merge the open PR from that branch into int-agentic. This triggers
-  #   the promote-to-main workflow which creates/updates a PR to main.
-  #
-  #   IMPORTANT: Uses GH_PAT (a Personal Access Token or GitHub App token)
-  #   instead of GITHUB_TOKEN so the push to int-agentic triggers
-  #   downstream workflows (promote-to-main.yml). Pushes made by
-  #   GITHUB_TOKEN do NOT trigger other workflows — this is a GitHub
-  #   Actions limitation to prevent infinite loops.
-  #   If GH_PAT is not configured, falls back to GITHUB_TOKEN (merge
-  #   still works, but promote-to-main won't auto-trigger).
+  # Step 7: Auto-merge PR into int-agentic
+  #   After successful tests on the MERGE COMMIT, merge the PR.
+  #   Uses GH_PAT so the push triggers promote-to-main.yml.
   # ────────────────────────────────────────────────────────────────────
   auto-merge:
     needs: [pipeline-config, integration-tests, agent-evaluation]
@@ -303,61 +355,35 @@ jobs:
       && needs.pipeline-config.outputs.full_deploy == 'true'
       && needs.integration-tests.result == 'success'
       && (needs.agent-evaluation.result == 'success' || needs.agent-evaluation.result == 'skipped')
-      && github.event_name == 'push'
-      && endsWith(github.ref_name, '-dev')
+      && github.event_name == 'pull_request'
+      && github.base_ref == 'int-agentic'
     runs-on: ubuntu-latest
     steps:
-      - name: Merge dev PR into int-agentic
+      - name: Auto-merge PR into int-agentic
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="${{ github.ref_name }}"
-          echo "🔍 Looking for open PR: ${BRANCH} → int-agentic"
-
-          PR_NUMBER=$(gh pr list \
-            --repo "${{ github.repository }}" \
-            --base int-agentic \
-            --head "$BRANCH" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')
-
-          if [ -z "$PR_NUMBER" ]; then
-            echo "📝 No open PR found — creating one automatically"
-            PR_URL=$(gh pr create \
-              --repo "${{ github.repository }}" \
-              --base int-agentic \
-              --head "$BRANCH" \
-              --title "chore: merge ${BRANCH} into int-agentic" \
-              --body "Auto-created by CI/CD pipeline run ${{ github.run_id }}")
-            echo "✅ Created PR: ${PR_URL}"
-            PR_NUMBER=$(echo "$PR_URL" | grep -oP '\d+$')
-          fi
-
-          echo "✅ Found PR #${PR_NUMBER}"
-          echo "🔀 Merging ${BRANCH} → int-agentic..."
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          echo "✅ Tests passed on merge commit — auto-merging PR #${PR_NUMBER}"
           gh pr merge "$PR_NUMBER" \
             --repo "${{ github.repository }}" \
             --squash \
             --auto \
-            --subject "chore: merge ${BRANCH} into int-agentic (auto)" \
+            --subject "chore: merge ${{ github.head_ref }} into int-agentic (auto)" \
             --body "Auto-merged after successful CI/CD pipeline run ${{ github.run_id }}"
           echo "✅ PR #${PR_NUMBER} merge initiated"
 
   # ────────────────────────────────────────────────────────────────────
   # Step 8: Auto-destroy dev environment after successful merge
-  #   Integration environments from *-dev branches are ephemeral.
-  #   After the code is merged to int-agentic, tear down the Azure
-  #   resources to save costs. Production environments are retained.
+  #   Dev environments are ephemeral — tear down after merge.
   # ────────────────────────────────────────────────────────────────────
   auto-destroy:
     needs: [pipeline-config, auto-merge]
     if: >-
       always()
       && needs.auto-merge.result == 'success'
-      && needs.pipeline-config.outputs.full_deploy == 'true'
-      && github.event_name == 'push'
-      && endsWith(github.ref_name, '-dev')
+      && github.event_name == 'pull_request'
+      && github.base_ref == 'int-agentic'
     uses: ./.github/workflows/destroy.yml
     with:
       environment: ${{ needs.pipeline-config.outputs.environment }}
